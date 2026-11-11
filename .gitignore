@@ -1,0 +1,4 @@
+node_modules/
+# jízdní řády se generují (npm run data), do repozitáře nepatří
+public/data/*.json
+public/data/*.bin
