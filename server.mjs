@@ -10,6 +10,8 @@
 //   ALLOWED_ORIGINS=…                         volitelné povolené originy pro externí frontend
 //   CARTO_API_KEY=…                           klíč pro podkladovou mapu (stejný jako CARTO_API_KEY v Androidu)
 //   DATA_REFRESH_H=12                         jak často kontrolovat nové jízdní řády (0 = nikdy)
+//   TRUST_PROXY=1                             kolik proxy (Caddy, Cloud Run…) stojí před serverem; bez toho se limity počítají podle IP přímého spojení
+//   RATE_LIMIT=0                              vypne omezení počtu požadavků; RATE_API / RATE_DATA / RATE_STATIC nastaví limity za minutu na IP (viz lib/ratelimit.mjs)
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { Hub } from './lib/hub.mjs';
 import { createSources } from './lib/sources.mjs';
 import { mockFetcher } from './lib/mock.mjs';
+import { createLimits, routeClass, clientIp, ipKey } from './lib/ratelimit.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(root, 'public');
@@ -25,6 +28,16 @@ const DATA_FILE = path.join(PUBLIC, 'data', 'timetable.json');
 const env = process.env;
 const PORT = Number(env.PORT || 8080);
 const HOST = env.HOST || '0.0.0.0';
+const TRUST_PROXY = Math.max(0, parseInt(env.TRUST_PROXY, 10) || 0);
+
+// ───────────── omezení počtu požadavků (DoS) ─────────────
+const limits = createLimits(env);
+let limitedCount = 0;
+// Jednou za minutu souhrn místo řádku na každý odmítnutý požadavek (log by se při útoku sám stal zátěží)
+setInterval(() => {
+  if (limitedCount) console.warn(`[rate-limit] za poslední minutu odmítnuto požadavků: ${limitedCount}`);
+  limitedCount = 0;
+}, 60_000).unref();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -47,6 +60,15 @@ const useMock = env.MOCK === '1';
 const feed = new Hub(createSources(env, { mockFetcher: useMock ? mockFetcher(DATA_FILE) : null }));
 // POLL_MODE=loop: dotazy na zdroje běží ve smyčce na pozadí; výchozí (lazy): jen když přijde požadavek na polohy
 if (env.POLL_MODE === 'loop') feed.start(); else feed.refresh().catch(() => {});
+
+// Odpověď /api/vehicles se sestavuje (fúze zdrojů + deduplikace) a data se stejně mění jen po 8-10 s,
+// proto se hotový JSON krátce drží v paměti: zátěž nezávisí na počtu požadavků.
+let vehiclesCache = { at: 0, body: '' };
+function vehiclesJson() {
+  const t = Date.now();
+  if (t - vehiclesCache.at > 1000) vehiclesCache = { at: t, body: JSON.stringify(feed.snapshot()) };
+  return vehiclesCache.body;
+}
 
 // ───────────── podkladová mapa ─────────────
 // Stejné styly jako Android appka: CARTO Voyager / Dark Matter. Klíč (CARTO_API_KEY) zůstává na serveru.
@@ -131,6 +153,13 @@ const server = http.createServer(async (req, res) => {
         return writeHead(status, h);
       };
     }
+    if (limits) {
+      const r = limits[routeClass((req.url || '').split('?')[0])].take(ipKey(clientIp(req, TRUST_PROXY)));
+      if (!r.ok) {
+        limitedCount++;
+        return send(req, res, 429, 'Too Many Requests', { 'content-type': 'text/plain; charset=utf-8', 'retry-after': String(r.retryAfterSec), 'cache-control': 'no-store' });
+      }
+    }
     if (req.method === 'OPTIONS' && cors) { res.writeHead(204, { 'access-control-allow-methods': 'GET, HEAD, OPTIONS', 'access-control-max-age': '86400' }); return res.end(); }
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(req, res, 405, 'Method Not Allowed', { allow: 'GET, HEAD' });
     const url = new URL(req.url, 'http://x');
@@ -138,7 +167,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/vehicles') {
       maybeRefreshData(); // frontend může být jinde (Hosting), takže stránku tenhle server nevidí
       if (env.POLL_MODE !== 'loop') await feed.refresh();
-      return send(req, res, 200, JSON.stringify(feed.snapshot()), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=3' });
+      return send(req, res, 200, vehiclesJson(), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=3' });
     }
     if (url.pathname === '/api/map-config') {
       return send(req, res, 200, JSON.stringify(mapConfig()), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300' });
@@ -165,6 +194,13 @@ const server = http.createServer(async (req, res) => {
     send(req, res, 500, 'Internal Server Error', { 'content-type': 'text/plain' });
   }
 });
+
+// Pomalí klienti (slowloris): hlavičky i celý požadavek musí dorazit rychle a nelze držet nekonečně spojení.
+// Odpovědi jsou jen GET/HEAD bez těla, takže tyhle limity nemají vliv na běžné klienty.
+server.headersTimeout = 15_000;
+server.requestTimeout = 30_000;
+server.keepAliveTimeout = 5_000;
+server.maxHeadersCount = 64;
 
 // ───────────── jízdní řády: první sestavení a pravidelná obnova ─────────────
 async function refreshData() {

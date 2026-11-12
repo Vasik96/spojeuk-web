@@ -1,0 +1,4 @@
+# Caddy si sám obstará a obnovuje certifikát (Let's Encrypt) pro doménu z proměnné DOMAIN.
+{$DOMAIN} {
+	reverse_proxy web:8080
+}

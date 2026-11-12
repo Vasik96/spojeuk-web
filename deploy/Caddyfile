@@ -1,4 +1,63 @@
-# Caddy si sám obstará a obnovuje certifikát (Let's Encrypt) pro doménu z proměnné DOMAIN.
+{
+	# rate_limit je plugin (mholt/caddy-ratelimit, sestavuje se v Dockerfile.caddy) a není ve výchozím pořadí direktiv
+	order rate_limit before basicauth
+
+	servers {
+		# Pomalí klienti (slowloris): hlavičky a tělo musí dorazit rychle, nečinná spojení se zavírají
+		timeouts {
+			read_header 10s
+			read_body   30s
+			idle        2m
+		}
+		max_header_size 16KB
+	}
+}
+
 {$DOMAIN} {
+	encode zstd gzip
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 50mb
+			roll_keep 3
+		}
+		format json
+	}
+
+	# Aplikace přijímá jen GET/HEAD, tělo požadavku tedy nemá důvod být velké
+	request_body {
+		max_size 1KB
+	}
+
+	# Limity na IP klienta za klouzavé okno. Mapa se ptá každých 8 s (~8/min na záložku);
+	# /data/ jsou velké soubory (timetable.json, shapes.bin) a stahují se při každém načtení stránky.
+	# Za NATem (škola, mobilní operátor) sdílí jednu IP víc lidí, proto limity nejsou přísné.
+	# Za CDN (např. Cloudflare) je potřeba nastavit trusted_proxies, jinak by {client_ip} byla adresa CDN.
+	@api path /api/*
+	rate_limit @api {
+		zone api {
+			key    {client_ip}
+			events 120
+			window 1m
+		}
+	}
+
+	@data path /data/*
+	rate_limit @data {
+		zone data {
+			key    {client_ip}
+			events 30
+			window 1m
+		}
+	}
+
+	@static not path /api/* /data/*
+	rate_limit @static {
+		zone static {
+			key    {client_ip}
+			events 240
+			window 1m
+		}
+	}
+
 	reverse_proxy web:8080
 }

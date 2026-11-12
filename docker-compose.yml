@@ -7,19 +7,24 @@ services:
     environment:
       PORT: "8080"
       POLL_MODE: loop        # na vlastním serveru dotazy na zdroje běží stále
+      TRUST_PROXY: "1"       # před serverem stojí Caddy; limity se počítají podle IP z X-Forwarded-For od Caddy
     expose:
       - "8080"
   caddy:
-    image: caddy:2
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
     restart: unless-stopped
     depends_on: [web]
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"
     environment:
       DOMAIN: ${DOMAIN:?Nastav DOMAIN v souboru .env}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
+      - ./caddy-logs:/var/log/caddy
 volumes:
   caddy_data:
