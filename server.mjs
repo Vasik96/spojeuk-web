@@ -3,10 +3,7 @@
 //
 //   PORT=8080 node server.mjs
 //   MOCK=1 node server.mjs                    polohy z jízdního řádu (vývoj, když není dostupný zdroj)
-//   SERVER_BASE=http://37.46.211.70:8787      vlastní server: /duk/traffic a /dpmul/traffic (Portabo se přímo nevolá)
-//   DUK_URL / DPMUL_URL                       přepíšou adresu jednoho feedu
-//   DPMUL_API_KEY=…                           záloha: přímé API DPMÚL, když vlastní server nemá čerstvá data
-//   SZ=0                                      nevolat Správu železnic
+//   SERVER_BASE=http://37.46.211.70:8787      vlastní server (spoje-feed, API v2): odtud se čte /api/vehicles, už sloučené ze zdrojů
 //   ALLOWED_ORIGINS=…                         volitelné povolené originy pro externí frontend
 //   CARTO_API_KEY=…                           klíč pro podkladovou mapu (stejný jako CARTO_API_KEY v Androidu)
 //   DATA_REFRESH_H=12                         jak často kontrolovat nové jízdní řády (0 = nikdy)
@@ -18,8 +15,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { Hub } from './lib/hub.mjs';
-import { createSources } from './lib/sources.mjs';
-import { mockFetcher } from './lib/mock.mjs';
+import { mockSnapshot } from './lib/mock.mjs';
 import { createLimits, routeClass, clientIp, ipKey } from './lib/ratelimit.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -57,12 +53,12 @@ const SECURITY = {
 
 // ───────────── živé polohy ─────────────
 const useMock = env.MOCK === '1';
-const feed = new Hub(createSources(env, { mockFetcher: useMock ? mockFetcher(DATA_FILE) : null }));
-// POLL_MODE=loop: dotazy na zdroje běží ve smyčce na pozadí; výchozí (lazy): jen když přijde požadavek na polohy
+const feed = new Hub(useMock ? { fetchSnapshot: mockSnapshot(DATA_FILE) } : { base: env.SERVER_BASE });
+// POLL_MODE=loop: dotazy na server poloh běží ve smyčce na pozadí; výchozí (lazy): jen když přijde požadavek na polohy
 if (env.POLL_MODE === 'loop') feed.start(); else feed.refresh().catch(() => {});
 
-// Odpověď /api/vehicles se sestavuje (fúze zdrojů + deduplikace) a data se stejně mění jen po 8-10 s,
-// proto se hotový JSON krátce drží v paměti: zátěž nezávisí na počtu požadavků.
+// Data se stejně mění jen po několika sekundách, proto se hotový JSON krátce drží v paměti:
+// zátěž nezávisí na počtu požadavků.
 let vehiclesCache = { at: 0, body: '' };
 function vehiclesJson() {
   const t = Date.now();

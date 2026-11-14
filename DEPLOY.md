@@ -48,5 +48,5 @@ Kontrola konfigurace po změně: `docker compose build caddy && docker compose r
 ## Poznámky
 
 - `CARTO_API_KEY` zůstává na serveru; v CARTO ho omez na svou doménu. Bez klíče se použije OpenFreeMap.
-- `SERVER_BASE` určuje zdroj `/duk/traffic` a `/dpmul/traffic`.
+- `SERVER_BASE` určuje server `spoje-feed`, ze kterého se čte `/api/vehicles` (API v2, už sloučené zdroje).
 - Správa železnic může serveru vracet 403; v takovém případě udělá pauzu a ostatní zdroje pokračují.

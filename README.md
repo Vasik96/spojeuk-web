@@ -21,7 +21,7 @@ Při prvním startu bez dat se jízdní řády a trasy stáhnou samy. Server kon
 | Data | `lib/build-timetable.mjs` | GTFS (autobusy + vlaky) → kompaktní JSON (~4 MB, ~0,4 MB po kompresi). Stejná logika jako `GtfsImporter` v appce, včetně párování nádraží |
 | Hledání | `public/js/planner.js` | RAPTOR, přestupy ≥ 120 s, pěšky do 250 m. Běží v prohlížeči, tedy offline |
 | Napovídání | `public/js/suggest.js` | používání → vzdálenost → zbytek |
-| Živá vozidla | `lib/feed.mjs`, `public/js/live.js` | server stahuje feed, drží zmizelá vozidla (MHD 5 min, ostatní 3 min), klient je páruje se spoji |
+| Živá vozidla | `lib/hub.mjs`, `public/js/live.js` | server čte sloučená vozidla ze `spoje-feed` (`/api/vehicles`), klient je páruje se spoji |
 | Mapa | `public/js/map.js` | vlastní engine (dlaždice, značky, čáry, pinch/drag), bez knihoven |
 | Server | `server.mjs` | statické soubory (brotli/gzip, CSP) + `GET /api/vehicles`, `GET /api/health` |
 
@@ -30,10 +30,9 @@ Při prvním startu bez dat se jízdní řády a trasy stáhnou samy. Server kon
 | Proměnná | Výchozí | Význam |
 |---|---|---|
 | `PORT`, `HOST` | `8080`, `0.0.0.0` | kde poslouchat |
-| `FEED_URL` | – | vlastní `spoje-feed` server (`…/duk/traffic`), zkouší se jako první; jinak veřejný zdroj |
+| `SERVER_BASE` | `http://37.46.211.70:8787` | vlastní `spoje-feed` server (API v2), odkud se čte `/api/vehicles` |
 | `MOCK` | – | `1` = polohy z jízdního řádu (vývoj) |
-| `POLL_S` | `10` | jak často stahovat zdroj |
-| `HOLD_MHD_S`, `HOLD_OTHER_S` | `300`, `180` | jak dlouho držet zmizelé vozidlo |
+| `POLL_MODE` | – | `loop` = server se na polohy ptá stále na pozadí; jinak jen při požadavku |
 | `DATA_REFRESH_H` | `12` | interval kontroly jízdních řádů a tras v hodinách |
 | `GTFS_BASE_URL` | release `gtfs` | odkud brát GTFS |
 

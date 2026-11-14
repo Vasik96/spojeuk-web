@@ -565,7 +565,7 @@ function renderSheet() {
   $('#sheet-body').innerHTML = `
     <h3>Informace o spoji</h3>
     <span class="big-badge${v.train ? ' train' : ''}${late ? ' late' : ''}">${icon(v.train ? 'train' : 'bus')}${esc(v.line)}</span>
-    <p class="age" style="margin-top:.7rem">ID vozidla: ${esc(v.ids?.length ? v.ids.join(' · ') : v.id ? vehicleSource(v) + ':' + v.id : 'není dostupné')}</p>
+    <p class="age" style="margin-top:.7rem">ID vozidla: ${esc(v.id ? vehicleSource(v) + ':' + v.id : 'není dostupné')}</p>
     <p class="age">Zdroj polohy: ${esc(sourceLabel(v))}</p>
     <p class="age">${esc(ageLabel(v.ageSec))}</p>
     <dl>
