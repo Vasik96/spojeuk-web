@@ -119,15 +119,36 @@ function setupFilter() {
   sync();
 }
 
-const MODE_LABEL = { bus: 'Autobus', tram: 'Tramvaj', metro: 'Metro', train: 'Vlak', ferry: 'Přívoz', funicular: 'Lanovka' };
+const MODE_LABEL = { bus: 'Bus', trolleybus: 'Bus', tram: 'Tramvaj', metro: 'Metro', train: 'Vlak', ferry: 'Přívoz', funicular: 'Lanovka' };
+const MODE_ICON = { bus: 'bus', trolleybus: 'bus', tram: 'tram', metro: 'metro', train: 'train', ferry: 'boat', funicular: 'tram' };
+/**
+ * Název zastávky u vozidla: autobus / MHD jen zastávka bez obce ("Divadlo"), vlak celý název (jezdí daleko).
+ * Stejně jako vehicleStopName v Android appce.
+ */
+const vehStop = (name, train) => (train ? prettyName(name) : stopLabel(prettyName(name)));
+
+/** Konečná vozidla: cíl ze zdroje, jinak (DPMÚL cíl neposílá) ze spoje v jízdním řádu nebo z dohledání na serveru. */
+function vehicleTerminal(v) {
+  if (v.dest) return v.dest;
+  try { const d = S.live?.detail(v); if (d?.terminal) return d.terminal; } catch { /* bez jízdního řádu */ }
+  const r = remoteTrips.get(v.uid)?.data;
+  return r?.stops?.length ? r.stops[r.stops.length - 1][0] : null;
+}
+
+/** Druh vozidla v jednotném čísle; trolejbus podle `mode` ze serveru (na mapě patří k autobusům). */
+const kindOf = (v) => (v.mode === 'trolleybus' ? 'trolleybus' : vehicleMode(v));
 
 /** Víc vozidel pod prstem (třeba dva vlaky v jedné stanici): výběr ze seznamu. */
 function chooseVehicle(hits) {
   const dlg = $('#choose-dlg');
   $('#choose-list').innerHTML = hits.slice(0, 12).map((v, i) => {
     const st = STYLES[vehicleStyle(v)];
-    return `<li><button type="button" data-i="${i}"><span class="mini-badge" style="background:${st.color};color:${st.darkText ? '#000' : '#fff'}">${esc(v.line)}</span>
-      <span><strong>${esc(MODE_LABEL[vehicleMode(v)] || 'Vozidlo')} ${esc(v.line)}</strong><small>${esc(v.dest ? `směr ${prettyName(v.dest)}` : sourceLabel(v))}</small></span></button></li>`;
+    // stejně jako v Android appce: ikona druhu v barvě vozidla, „Autobus 9“, „směr Divadlo“ (zkrácený název)
+    const kind = kindOf(v);
+    const term = vehicleTerminal(v);
+    const sub = term ? `směr ${vehStop(term, v.train)}` : (v.agency || sourceLabel(v));
+    return `<li><button type="button" data-i="${i}"><span class="kind-ico" style="background:${st.color};color:${st.darkText ? '#000' : '#fff'}">${icon(MODE_ICON[kind] || 'bus')}</span>
+      <span class="kind-txt"><strong>${esc(MODE_LABEL[kind] || 'Vozidlo')} ${esc(v.line)}</strong><small>${esc(sub)}</small></span></button></li>`;
   }).join('');
   $('#choose-list').onclick = (e) => {
     const b = e.target.closest('button[data-i]');
@@ -676,8 +697,8 @@ function renderSheet() {
     <p class="age">${esc(ageLabel(v.ageSec))}</p>
     <dl>
       <div><dt>Zpoždění:</dt><dd><span class="tag${v.delay >= 1 ? (late ? ' late' : '') : ' ok'}">${delayText}</span></dd></div>
-      ${d.next ? `<div><dt>Příští zastávka:</dt><dd>${esc(d.next)}</dd></div>` : ''}
-      ${d.terminal ? `<div><dt>Konečná zastávka:</dt><dd>${esc(d.terminal)}</dd></div>` : v.dest ? `<div><dt>Směr:</dt><dd>${esc(prettyName(v.dest))}</dd></div>` : ''}
+      ${d.next ? `<div><dt>Příští zastávka:</dt><dd>${esc(vehStop(d.next, v.train))}</dd></div>` : ''}
+      ${d.terminal ? `<div><dt>Konečná zastávka:</dt><dd>${esc(vehStop(d.terminal, v.train))}</dd></div>` : v.dest ? `<div><dt>Směr:</dt><dd>${esc(vehStop(v.dest, v.train))}</dd></div>` : ''}
       ${v.agency || d.trip?.agency ? `<div><dt>Dopravce:</dt><dd>${esc(v.agency || d.trip.agency)}</dd></div>` : ''}
     </dl>
     <div class="chips">${v.ac ? `<span class="tag">${icon('snow')}Klimatizace</span>` : ''}${v.low ? `<span class="tag">${icon('access')}Bezbariérový</span>` : ''}</div>
