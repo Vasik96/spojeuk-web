@@ -254,3 +254,33 @@ body { overscroll-behavior: none; }
 .cat-dots { display: inline-flex; gap: 3px; }
 .cat-dots .filter-dot { width: 10px; height: 10px; border-width: 1.5px; }
 
+/* ───── animace zobrazení (skrytí animuje app.js) ───── */
+@keyframes pop-in { from { opacity: 0; transform: translateY(6px) scale(.98); } }
+@keyframes drop-in { from { opacity: 0; transform: translateY(-6px); } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes sheet-up { from { transform: translateY(100%); } }
+@keyframes dlg-out { to { opacity: 0; transform: translateY(8px) scale(.97); } }
+.chip.clear-route, .chip.warn, .route-dismiss:not([hidden]), .empty, .when { animation: pop-in .24s cubic-bezier(.2, .8, .2, 1); }
+.form-msg, .suggest { animation: drop-in .18s cubic-bezier(.2, .8, .2, 1); }
+#results:not([hidden]) { animation: fade-in .2s ease; }
+@media (max-width: 959px) { .sheet { animation: sheet-up .32s cubic-bezier(.2, .8, .2, 1); } }
+.mini-dlg[open] { animation: rise .26s cubic-bezier(.2, .8, .2, 1) both; }
+.mini-dlg[open]::backdrop, .welcome[open]::backdrop { animation: fade-in .22s ease; }
+dialog.closing { animation: dlg-out .18s cubic-bezier(.4, 0, 1, 1) forwards; }
+dialog.closing::backdrop { animation: fade-out .18s ease forwards; }
+.tl-wrap { overflow: hidden; }
+
+/* odezva tlačítek na stisk */
+.pill-btn, .fab, .cat-btn, .chip.clear-route, .route-dismiss, .toggle, .map-controls button, .sheet-close, .choose-list button, .filter-row, .link-btn, .tabbar button {
+  transition: transform .14s ease, background-color .2s ease, color .2s ease, box-shadow .2s ease;
+}
+.pill-btn:active, .fab:active, .cat-btn:active, .chip.clear-route:active, .route-dismiss:active, .map-controls button:active, .sheet-close:active, .choose-list button:active { transform: scale(.94); }
+.toggle:active, .filter-row:active, .tabbar button:active { transform: scale(.97); }
+.toggle:hover, .link-btn:hover { opacity: .85; }
+
+/* oznámení dole (toast) */
+.toast { position: fixed; z-index: 60; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 92px); margin: 0 auto; max-width: 460px; padding: .8rem 1rem; border-radius: 16px; background: var(--ink); color: var(--surface); font-size: .93rem; font-weight: 550; box-shadow: var(--shadow-2); text-align: center; animation: pop-in .26s cubic-bezier(.2, .8, .2, 1); }
+.toast[hidden] { display: none; }
+@media (min-width: 960px) { .toast { bottom: 28px; } }
+

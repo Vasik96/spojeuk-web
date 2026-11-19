@@ -18,6 +18,41 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const icon = (n, cls = '') => `<svg class="icon ${cls}" aria-hidden="true"><use href="/assets/icons.svg#${n}"/></svg>`;
 
+// ───────────── animace zobrazení / skrytí ─────────────
+// Zobrazení animuje CSS (animace běží, když prvek přestane mít display: none), skrytí tady: prvek nejdřív
+// plynule zmizí a teprve pak dostane hidden. Při „omezit pohyb“ v systému se nic neanimuje.
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isMobile = () => matchMedia('(max-width: 640px)').matches;
+const EASE_OUT = 'cubic-bezier(.2, .8, .2, 1)', EASE_IN = 'cubic-bezier(.4, 0, 1, 1)';
+
+function showEl(el) {
+  if (!el) return;
+  if (el._hiding) { el._hiding = false; el._hideAnim?.cancel(); }
+  el.hidden = false;
+}
+
+function hideEl(el, { y = 8, scale = 1, duration = 170 } = {}) {
+  if (!el || el.hidden || el._hiding) return;
+  if (reduceMotion()) { el.hidden = true; return; }
+  el._hiding = true;
+  const a = (el._hideAnim = el.animate(
+    [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateY(${y}px) scale(${scale})` }],
+    { duration, easing: EASE_IN, fill: 'forwards' },
+  ));
+  a.finished.then(() => { if (el._hiding) { el._hiding = false; el.hidden = true; } a.cancel(); }).catch(() => {});
+}
+
+/** Krátké oznámení dole (nenalezené vozidlo, přibližná poloha…), samo zmizí. */
+let toastTimer;
+function toast(text, ms = 4500) {
+  const t = $('#toast');
+  t.textContent = text;
+  if (!t.hidden && !t._hiding) t.animate([{ transform: 'scale(1.03)' }, { transform: 'none' }], { duration: 180, easing: EASE_OUT });
+  showEl(t);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => hideEl(t, { y: 12 }), ms);
+}
+
 /** Stav aplikace. */
 const S = {
   tt: null, planner: null, live: null, index: [], map: null,
@@ -54,7 +89,13 @@ darkMq.addEventListener('change', applyTheme);
 
 // ───────────── záložky ─────────────
 function setTab(tab) {
+  const changed = $('#shell').dataset.tab !== tab;
   $('#shell').dataset.tab = tab;
+  // mobil: přepnutí záložky krátce prolne (na širokém displeji jsou vidět obě části)
+  if (changed && isMobile() && !reduceMotion()) {
+    const el = tab === 'map' ? $('#mapwrap') : $('.panel');
+    el?.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: EASE_OUT });
+  }
   $$('.tabbar button').forEach((b) => (b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
   if (tab === 'map') requestAnimationFrame(() => S.map?.invalidate());
   requestAnimationFrame(() => S.vlayer?.setVisible(mapShown()));
@@ -199,7 +240,7 @@ function chooseVehicle(hits) {
   $('#choose-list').onclick = (e) => {
     const b = e.target.closest('button[data-i]');
     if (!b) return;
-    dlg.close();
+    animateDialogClose(dlg);
     selectVehicle(hits[+b.dataset.i].uid);
   };
   dlg.showModal();
@@ -218,7 +259,7 @@ function setupField(key) {
   };
   field.setValue = setValue;
 
-  const close = () => { list.hidden = true; input.setAttribute('aria-expanded', 'false'); active = -1; input.removeAttribute('aria-activedescendant'); };
+  const close = () => { hideEl(list, { y: -4, duration: 130 }); input.setAttribute('aria-expanded', 'false'); active = -1; input.removeAttribute('aria-activedescendant'); };
   const choose = (place) => { setValue(place); close(); typed = false; if (key === 'from' && !S.to) $('#to-input').focus(); };
 
   const render = () => {
@@ -309,8 +350,10 @@ const accText = (m) => (m >= 1000 ? `${Math.round(m / 1000)} km` : `${Math.round
 
 function formMessage(text, kind = 'warn') {
   const m = $('#form-msg');
-  m.hidden = !text; m.textContent = text || '';
+  if (!text) { hideEl(m, { y: -4, duration: 140 }); return; }
+  m.textContent = text;
   m.style.background = kind === 'info' ? 'var(--brand-100)' : ''; m.style.color = kind === 'info' ? 'var(--brand-700)' : '';
+  showEl(m);
 }
 
 async function useMyLocation() {
@@ -527,7 +570,7 @@ function journeyHtml(j, i) {
     <div class="j-sub">Směr ${esc(d.destination)}</div>
     <div class="j-sub">${esc(d.agency)}</div>
     <button type="button" class="toggle" data-act="toggle" aria-expanded="${open}">Podrobnosti ${icon('chevron')}</button>
-    ${open ? timelineHtml(d) : ''}
+    ${open ? `<div class="tl-wrap">${timelineHtml(d)}</div>` : ''}
   </li>`;
 }
 
@@ -559,11 +602,27 @@ $('#journeys').addEventListener('click', (e) => {
   const li = btn.closest('.journey');
   const j = S.journeys[+li.dataset.i];
   if (btn.dataset.act === 'toggle') {
-    const k = j.key;
-    if (S.expanded.has(k)) S.expanded.delete(k); else S.expanded.add(k);
-    li.outerHTML = journeyHtml(j, +li.dataset.i);
-    S.lastHtml = null;
-  } else if (btn.dataset.act === 'map') showJourneyOnMap(descOf(j));
+    // podrobnosti se rozbalí / sbalí výškovou animací, karta se nepřekresluje celá
+    const k = j.key, open = !S.expanded.has(k);
+    if (open) S.expanded.add(k); else S.expanded.delete(k);
+    btn.setAttribute('aria-expanded', String(open));
+    const old = li.querySelector('.tl-wrap');
+    if (open && !old) {
+      const wrap = document.createElement('div');
+      wrap.className = 'tl-wrap';
+      wrap.innerHTML = timelineHtml(descOf(j));
+      li.append(wrap);
+      if (!reduceMotion()) wrap.animate([{ height: '0px', opacity: 0 }, { height: `${wrap.scrollHeight}px`, opacity: 1 }], { duration: 280, easing: EASE_OUT });
+    } else if (!open && old) {
+      if (reduceMotion()) old.remove();
+      else old.animate([{ height: `${old.scrollHeight}px`, opacity: 1 }, { height: '0px', opacity: 0 }], { duration: 200, easing: EASE_IN, fill: 'forwards' }).finished.then(() => old.remove()).catch(() => old.remove());
+    }
+    // seznam se při příštím obnovení nepřekreslí, pokud se nic jiného nezměnilo
+    S.lastHtml = S.journeys.map(journeyHtml).join('');
+  } else if (btn.dataset.act === 'map') {
+    btn.animate([{ transform: 'scale(.92)' }, { transform: 'none' }], { duration: 220, easing: EASE_OUT });
+    showJourneyOnMap(descOf(j));
+  }
 });
 
 // ───────────── trasy na mapě ─────────────
@@ -573,13 +632,13 @@ function clearOverlay() {
   overlayGen++;
   S.overlay.lines.forEach((l) => l.remove()); S.overlay.markers.forEach((m) => m.remove());
   S.overlay = { lines: [], markers: [] };
-  $('#clear-route').hidden = true;
-  $('#clear-route-icon').hidden = true;
+  hideEl($('#clear-route'), { y: -8 });
+  hideEl($('#clear-route-icon'), { y: 8, scale: .8 });
 }
 
 function showRouteControls() {
-  $('#clear-route').hidden = false;
-  $('#clear-route-icon').hidden = false;
+  showEl($('#clear-route'));
+  showEl($('#clear-route-icon'));
 }
 
 function dot(lat, lng, cls, label) {
@@ -637,8 +696,11 @@ function showJourneyOnMap(d) {
   showRouteControls();
   setTab('map');
   // jede-li některý spoj z cesty právě živě, zvýrazní se a přiblíží se na něj (jako v aplikaci)
-  const live = d.rides.map((r) => S.live.forTrip(r.tid)).find(Boolean);
+  // vůz spoje stejně jako v appce: spárovaný se spojem (i DPMÚL podle polohy), jinak nejbližší vůz linky před nástupem
+  const live = S.live.vehicleForJourney?.(d)?.v;
   const liveUid = live && S.vehicles.some((x) => vehicleUid(x) === vehicleUid(live)) ? vehicleUid(live) : null;
+  // dřív tlačítko „nic neudělalo“: když vůz spoje teď nevidíme, aspoň to řekneme
+  if (!liveUid) setTimeout(() => toast('Vůz tohoto spoje teď na mapě nevidíme, ukazuji jen trasu.'), 250);
   if (liveUid) {
     setTimeout(() => {
       const mobile = matchMedia('(max-width: 640px)').matches;
@@ -650,7 +712,7 @@ function showJourneyOnMap(d) {
       if (mobile) {
         flashTimer = setTimeout(() => { S.flashUid = null; S.vlayer.setFlash(null); }, 2400);
       }
-      if (mobile) $('#sheet').hidden = true;
+      if (mobile) hideEl($('#sheet'), { y: 60 });
       else renderSheet();
       const p = S.vlayer.position(liveUid);
       if (p) S.map.setView([p.lat, p.lng], Math.max(S.map.zoom, mobile ? 16 : 15), { animate: true });
@@ -703,7 +765,9 @@ function selectVehicle(uid) {
 
 function closeSheet() {
   S.selected = null;
-  $('#sheet').hidden = true;
+  // detail zajede dolů (na mobilu přes celou výšku, na počítači jen kousek)
+  const sh = $('#sheet');
+  hideEl(sh, isMobile() ? { y: Math.max(120, sh.offsetHeight), duration: 220 } : { y: 16, duration: 170 });
   S.vlayer?.setSelected(null);
 }
 $('#sheet-close').addEventListener('click', () => closeSheet());
@@ -719,7 +783,7 @@ function sourceLabel(v) {
 function renderSheet() {
   const v = S.vehicles.find((x) => vehicleUid(x) === S.selected);
   const sheet = $('#sheet');
-  if (!v) { sheet.hidden = false; $('#sheet-body').innerHTML = '<h3>Vozidlo</h3><p>Vozidlo už zdroj nedodává.</p>'; return; }
+  if (!v) { showEl(sheet); $('#sheet-body').innerHTML = '<h3>Vozidlo</h3><p>Vozidlo už zdroj nedodává.</p>'; return; }
   let d = S.live.detail(v);
   // spoj mimo jízdní řád webu (Praha, celá ČR): dohledá ho server v celostátním jízdním řádu
   if (!d.trip) d = remoteDetail(v) || d;
@@ -747,7 +811,7 @@ function renderSheet() {
     <div class="chips">${v.ac ? `<span class="tag">${icon('snow')}Klimatizace</span>` : ''}${v.low ? `<span class="tag">${icon('access')}Bezbariérový</span>` : ''}</div>
     ${d.pending ? '<p class="age">Dohledávám spoj…</p>' : ''}
     ${d.trip ? '<button class="btn btn-primary" id="route-btn" type="button">Zobrazit trasu spoje</button>' : ''}`;
-  sheet.hidden = false;
+  showEl(sheet);
   $('#route-btn')?.addEventListener('click', () => {
     drawVehicleRoute(d);
     if (matchMedia('(max-width: 640px)').matches) closeSheet();
@@ -820,13 +884,24 @@ $('#fab-locate').addEventListener('click', async () => {
   finally { fab.classList.remove('busy'); }
 });
 
-let toastTimer;
-function toast(text) {
-  const o = $('#outage');
-  o.querySelector('span').textContent = text;
-  o.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { o.hidden = true; }, 6000);
+
+// ───────────── dialogy: plynulé zavření ─────────────
+// Formulář s method="dialog" i Escape by dialog zavřely okamžitě; nejdřív krátká animace, pak close().
+function animateDialogClose(dlg, value) {
+  if (dlg._closing) return;
+  if (reduceMotion()) { dlg.close(value); return; }
+  dlg._closing = true;
+  dlg.classList.add('closing');
+  const done = () => { dlg._closing = false; dlg.classList.remove('closing'); dlg.close(value); };
+  dlg.addEventListener('animationend', done, { once: true });
+  setTimeout(() => { if (dlg._closing) done(); }, 260);   // pojistka, kdyby animace neproběhla
+}
+for (const dlg of $$('dialog')) {
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); animateDialogClose(dlg, 'cancel'); });
+  dlg.querySelector('form[method="dialog"]')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    animateDialogClose(dlg, e.submitter?.value ?? '');
+  });
 }
 
 // ───────────── uvítací dialog ─────────────

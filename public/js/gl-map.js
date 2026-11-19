@@ -190,6 +190,8 @@ class GlMarker {
     this.el = el;
     if (onClick) this.root.addEventListener('click', (e) => { e.stopPropagation(); onClick(e); });
     this.marker = new (ml().Marker)({ element: this.root, anchor: 'center' }).setLngLat([lng, lat]).addTo(view.map);
+    // plynulé objevení (jen průhlednost: transform kořene patří MapLibre, jím se značka umisťuje)
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) this.root.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: 'ease-out' });
   }
 
   setLatLng(lat, lng, animate = false) {
@@ -210,10 +212,16 @@ class GlMarker {
     if (t >= 1) this.anim = null;
   }
 
-  remove() { this.marker.remove(); this.view.markers.delete(this); }
+  remove() {
+    this.view.markers.delete(this);
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) { this.marker.remove(); return; }
+    const a = this.root.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: 'ease-in', fill: 'forwards' });
+    a.finished.then(() => this.marker.remove()).catch(() => this.marker.remove());
+  }
 }
 
 let lineSeq = 0;
+const FADE_MS = 320;   // objevení / zmizení trasy na mapě
 
 class GlLine {
   constructor(view, points, style) {
@@ -240,19 +248,32 @@ class GlLine {
     map.addSource(id, { type: 'geojson', data: this._data() });
     // trasy pod vozidly (vrstva 'veh-gl' z vehicle-layer.js), vozidla zůstanou navrch jako v appce
     const before = map.getLayer('veh-gl') ? 'veh-gl' : undefined;
-    if (s.casing && !s.dash) map.addLayer({ id: `${id}-casing`, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': s.casing, 'line-width': s.width + 4, 'line-opacity': 0.85 } }, before);
+    // trasa se plynule objeví: průhlednost začne na 0 a přechodem (paint transition) jde na cílovou hodnotu
+    const fade = { duration: FADE_MS, delay: 0 };
+    if (s.casing && !s.dash) map.addLayer({ id: `${id}-casing`, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': s.casing, 'line-width': s.width + 4, 'line-opacity': 0, 'line-opacity-transition': fade } }, before);
     map.addLayer({
       id: `${id}-line`, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': s.color, 'line-width': s.width, 'line-opacity': s.opacity, ...(s.dash ? { 'line-dasharray': [0.1, 2.2] } : {}) },
+      paint: { 'line-color': s.color, 'line-width': s.width, 'line-opacity': 0, 'line-opacity-transition': fade, ...(s.dash ? { 'line-dasharray': [0.1, 2.2] } : {}) },
     }, before);
     if (s.arrows) {
       map.addLayer({
         id: `${id}-arrows`, type: 'symbol', source: id,
         layout: { 'symbol-placement': 'line', 'symbol-spacing': 110, 'icon-image': 'route-arrow', 'icon-allow-overlap': true, 'icon-ignore-placement': true, 'icon-rotation-alignment': 'map' },
-        paint: {},
+        paint: { 'icon-opacity': 0, 'icon-opacity-transition': fade },
       }, before);
       map.setLayoutProperty(`${id}-arrows`, 'icon-size', ['interpolate', ['linear'], ['zoom'], 8, 0.32, 10, 0.45, 12, 0.6, 14, 0.78, 16, 0.95, 18, 1.1]);
     }
+    requestAnimationFrame(() => this._opacity(1));
+  }
+
+  /** Průhlednost všech vrstev čáry (0 = schovaná, 1 = podle stylu); mění se plynule přechodem. */
+  _opacity(k) {
+    const map = this.view.map, id = this.id, s = this.style;
+    try {
+      if (map.getLayer(`${id}-casing`)) map.setPaintProperty(`${id}-casing`, 'line-opacity', 0.85 * k);
+      if (map.getLayer(`${id}-line`)) map.setPaintProperty(`${id}-line`, 'line-opacity', s.opacity * k);
+      if (map.getLayer(`${id}-arrows`)) map.setPaintProperty(`${id}-arrows`, 'icon-opacity', k);
+    } catch { /* mapa už je zrušená */ }
   }
 
   setPoints(points) {
@@ -263,10 +284,14 @@ class GlLine {
 
   remove() {
     const map = this.view.map, id = this.id;
-    try {
-      for (const l of ['arrows', 'line', 'casing']) if (map.getLayer(`${id}-${l}`)) map.removeLayer(`${id}-${l}`);
-      if (map.getSource(id)) map.removeSource(id);
-    } catch { /* mapa už je zrušená */ }
     this.view.lines.delete(this);
+    // nejdřív plynule zmizí, pak se vrstvy odeberou
+    this._opacity(0);
+    setTimeout(() => {
+      try {
+        for (const l of ['arrows', 'line', 'casing']) if (map.getLayer(`${id}-${l}`)) map.removeLayer(`${id}-${l}`);
+        if (map.getSource(id)) map.removeSource(id);
+      } catch { /* mapa už je zrušená */ }
+    }, FADE_MS + 40);
   }
 }
