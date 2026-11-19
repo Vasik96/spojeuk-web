@@ -11,11 +11,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildTimetable } from '../lib/build-timetable.mjs';
 import { buildShapePack, SHAPES_URL } from '../lib/shapes.mjs';
+import { LOOKUP_FILES, gunzipTo } from '../lib/trip-lookup.mjs';
+import crypto from 'node:crypto';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name, def) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : def; };
 const BASE = arg('base', process.env.GTFS_BASE_URL || 'https://github.com/Vasik96/spojeuk-data/releases/download/gtfs');
 const outDir = path.resolve(arg('out', path.join(root, 'public', 'data')));
+// soubory jen pro server (dohledání spoje vozidla mimo oblast): celostátní DB a tvary tras, NEservírují se ven
+export const LOOKUP_DIR = path.resolve(process.env.LOOKUP_DIR || arg('lookup', path.join(root, 'data')));
 
 async function download(url) {
   const res = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'spojeuk-web/1.0' } });
@@ -46,6 +50,12 @@ export async function build({ jdf, rail, tag, shapesBus, shapesTrain } = {}) {
     const pack = await buildShapePack(gidList, files, stopCoords);
     data.trips.forEach((t, i) => { t[13] = pack.index[i]; });
     fs.writeFileSync(path.join(outDir, 'shapes.bin'), pack.bin);
+    // stažené tvary si nechá server pro dohledání tras vozidel mimo oblast
+    fs.mkdirSync(LOOKUP_DIR, { recursive: true });
+    for (const [k, f] of Object.entries(files)) {
+      const dest = path.join(LOOKUP_DIR, LOOKUP_FILES[k]);
+      if (f.startsWith(tmpDir)) fs.renameSync(f, dest); else fs.copyFileSync(f, dest);
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
     console.log(`Trasy: ${pack.index.filter(Boolean).length}/${data.trips.length} spojů, ${pack.used} tvarů, ${(pack.bin.length / 1e6).toFixed(2)} MB`);
     if (pack.unmatched.length) {
@@ -62,6 +72,8 @@ export async function build({ jdf, rail, tag, shapesBus, shapesTrain } = {}) {
     fs.rmSync(path.join(outDir, 'shapes.bin'), { force: true });
     for (const d of fs.readdirSync(outDir)) if (d.startsWith('.shapes-')) fs.rmSync(path.join(outDir, d), { recursive: true, force: true });
   }
+  try { await fetchLookup(); } catch (e) { console.warn(`Celostátní jízdní řád pro dohledání vozidel se nepodařilo stáhnout (${e.message}); vozidla mimo oblast budou bez trasy.`); }
+
   const json = JSON.stringify(data);
   const tmp = path.join(outDir, 'timetable.json.tmp');
   fs.writeFileSync(tmp, json);
@@ -69,6 +81,27 @@ export async function build({ jdf, rail, tag, shapesBus, shapesTrain } = {}) {
   fs.writeFileSync(path.join(outDir, 'meta.json'), JSON.stringify({ ...data.meta, bytes: json.length }));
   console.log(`Hotovo: ${data.meta.trips} spojů, ${data.meta.stops} zastávek, ${(json.length / 1e6).toFixed(2)} MB → ${outDir}`);
   return data.meta;
+}
+
+/** Celostátní jízdní řád (timetable.sqlite, stejný jako v Android appce) a tvary tras PID doplňků pro server. */
+export async function fetchLookup() {
+  fs.mkdirSync(LOOKUP_DIR, { recursive: true });
+  const info = JSON.parse((await download(`${BASE}/gtfs.json`)).toString());
+  const db = info.db;
+  if (!db?.name) throw new Error('gtfs.json nemá db');
+  const stamp = path.join(LOOKUP_DIR, 'timetable.tag');
+  const dest = path.join(LOOKUP_DIR, LOOKUP_FILES.db);
+  if (!(fs.existsSync(dest) && fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8') === `${info.tag}|${db.sha256}`)) {
+    const gz = await download(`${BASE}/${db.name}`);
+    if (db.sha256 && crypto.createHash('sha256').update(gz).digest('hex') !== db.sha256) throw new Error('kontrolní součet DB nesedí');
+    gunzipTo(gz, dest);
+    fs.writeFileSync(stamp, `${info.tag}|${db.sha256}`);
+    console.log(`Celostátní jízdní řád pro server: ${db.trips} spojů`);
+  }
+  const shapesBase = process.env.SHAPES_BASE_URL || SHAPES_URL;
+  const pid = await download(`${shapesBase}/${LOOKUP_FILES.pid}`);
+  fs.writeFileSync(`${path.join(LOOKUP_DIR, LOOKUP_FILES.pid)}.tmp`, pid);
+  fs.renameSync(`${path.join(LOOKUP_DIR, LOOKUP_FILES.pid)}.tmp`, path.join(LOOKUP_DIR, LOOKUP_FILES.pid));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

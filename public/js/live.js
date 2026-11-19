@@ -62,7 +62,12 @@ export class LiveTracker {
   enrich(v) {
     const tt = this.tt;
     const tid = v.train ? tt.findTrainTripId(v.cis) : v.cis && v.cis !== '000000' && v.trip ? tt.findTripId(v.cis, v.trip) : null;
-    if (!tid) return v;
+    if (!tid) {
+      // vlak mimo oblast jízdního řádu webu: linka aspoň z tabulky čísel vlaků
+      const line = v.train && tt.trainLines?.[String(v.cis ?? '').trim().replace(/^0+/, '')];
+      if (line) v.line = line;
+      return v;
+    }
     const line = tt.trips[tid].line;
     if (line && line.trim() && line !== '?') v.line = line.trim();
     return v;
@@ -82,6 +87,33 @@ export class LiveTracker {
   forTrip(tid) {
     const t = this.tt.trips[tid];
     return t.isTrain ? this.byTrip.get(`train:${t.num}`) : t.cis ? this.byTrip.get(`${t.cis}:${t.num}`) : undefined;
+  }
+
+  /**
+   * Podrobnosti ze serverového dohledání (vozidla mimo oblast jízdního řádu webu, např. Praha).
+   * r = { line, head, agency, isTrain, stops: [[název, lat, lng, příjezd, odjezd]], route: [[lat, lng]] | null }
+   */
+  detailFromRemote(v, r) {
+    const stops = r.stops.map(([name, lat, lng, arr, dep], i) => ({ id: i, name: prettyName(name), lat, lng, arr, dep, has: !!(lat || lng) }));
+    const pts = [], idx = [];
+    stops.forEach((s, i) => { if (s.has) { pts.push([s.lat, s.lng]); idx.push(i); } });
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + distanceM(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]));
+    const poly = { pts, idx, cum };
+    const pr = progressAlong(poly, v.lat, v.lng);
+    let nextIdx = null;
+    if (pr && pr.off < 1500) {
+      const k = cum.findIndex((c) => c >= pr.pos - 40);
+      nextIdx = idx[k < 0 ? idx.length - 1 : k];
+    }
+    return {
+      trip: { line: r.line, head: r.head, agency: r.agency, isTrain: r.isTrain, remote: true },
+      tid: null, exact: false,
+      terminal: stops.length ? stops[stops.length - 1].name : null,
+      next: nextIdx != null ? stops[nextIdx].name : null,
+      route: pts, shape: r.route && r.route.length >= 2 ? r.route : null,
+      stops, nextIdx,
+    };
   }
 
   /** Podrobnosti o vozidle: spoj, příští a konečná zastávka, zbývající zastávky. */

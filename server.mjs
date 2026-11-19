@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { Hub } from './lib/hub.mjs';
 import { mockSnapshot } from './lib/mock.mjs';
 import { createLimits, routeClass, clientIp, ipKey } from './lib/ratelimit.mjs';
+import { TripLookup } from './lib/trip-lookup.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(root, 'public');
@@ -64,6 +65,44 @@ function vehiclesJson() {
   const t = Date.now();
   if (t - vehiclesCache.at > 1000) vehiclesCache = { at: t, body: JSON.stringify(feed.snapshot()) };
   return vehiclesCache.body;
+}
+
+// ───────────── spoj vozidla mimo oblast (celostátní jízdní řád) ─────────────
+// Prohlížeč má jízdní řád jen Ústeckého kraje; pražská a další vozidla se dohledají tady (viz lib/trip-lookup.mjs).
+const LOOKUP_DIR = path.resolve(env.LOOKUP_DIR || path.join(root, 'data'));
+let lookup = null, lookupLoading = null, lookupFailedAt = 0;
+function getLookup() {
+  if (lookup) return Promise.resolve(lookup);
+  if (lookupLoading) return lookupLoading;
+  if (Date.now() - lookupFailedAt < 60_000) return Promise.resolve(null);
+  lookupLoading = TripLookup.open(LOOKUP_DIR)
+    .then((l) => { lookup = l; return l; })
+    .catch((e) => { console.warn('[trip-lookup]', e.message); lookupFailedAt = Date.now(); return null; })
+    .finally(() => { lookupLoading = null; });
+  return lookupLoading;
+}
+function reloadLookup() { const old = lookup; lookup = null; tripCache.clear(); old?.close(); getLookup(); }
+
+const tripCache = new Map(); // dotaz (zaokrouhlený) → { at, body }
+async function vehicleTripJson(q) {
+  const num = (k) => { const x = Number(q.get(k)); return Number.isFinite(x) ? x : null; };
+  const v = {
+    line: String(q.get('line') || '').slice(0, 20), lat: num('lat'), lng: num('lng'), delay: num('delay') || 0,
+    heading: q.get('heading') === null || q.get('heading') === '' ? null : num('heading'),
+    dest: String(q.get('dest') || '').slice(0, 80), train: q.get('train') === '1', num: String(q.get('num') || '').slice(0, 12), mode: String(q.get('mode') || '').slice(0, 12),
+  };
+  if (v.lat == null || v.lng == null || (!v.line && !v.num)) return { status: 400, body: '{"error":"chybí linka nebo poloha"}' };
+  // vůz se dotazuje opakovaně (každé obnovení detailu): stejná linka a skoro stejné místo => stejný výsledek
+  const key = [v.line, v.num, v.train, v.dest, v.lat.toFixed(3), v.lng.toFixed(3), Math.round(v.delay)].join('|');
+  const hit = tripCache.get(key);
+  if (hit && Date.now() - hit.at < 30_000) return { status: 200, body: hit.body };
+  const l = await getLookup();
+  if (!l) return { status: 503, body: '{"error":"celostátní jízdní řád není k dispozici"}' };
+  const tid = l.match(v);
+  const body = JSON.stringify(tid == null ? { trip: null } : { trip: l.describe(tid) });
+  if (tripCache.size > 5000) tripCache.clear();
+  tripCache.set(key, { at: Date.now(), body });
+  return { status: 200, body };
 }
 
 // ───────────── podkladová mapa ─────────────
@@ -165,6 +204,10 @@ const server = http.createServer(async (req, res) => {
       if (env.POLL_MODE !== 'loop') await feed.refresh();
       return send(req, res, 200, vehiclesJson(), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=3' });
     }
+    if (url.pathname === '/api/vehicle-trip') {
+      const r = await vehicleTripJson(url.searchParams);
+      return send(req, res, r.status, r.body, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    }
     if (url.pathname === '/api/map-config') {
       return send(req, res, 200, JSON.stringify(mapConfig()), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300' });
     }
@@ -215,6 +258,7 @@ async function refreshData() {
   if (same) return console.log('[data] jízdní řády i trasy jsou aktuální');
   console.log('[data] stahuji jízdní řády a trasy…');
   await build({ tag: remote ?? '' });
+  reloadLookup();
 }
 
 if (!fs.existsSync(DATA_FILE)) {

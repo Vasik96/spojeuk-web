@@ -121,6 +121,7 @@
     <button class="chip clear-route" id="clear-route" type="button" hidden><svg class="icon"><use href="/assets/icons.svg#x"/></svg>Zrušit zobrazení trasy</button>
     <button class="route-dismiss" id="clear-route-icon" type="button" aria-label="Zrušit zobrazení trasy" title="Zrušit zobrazení trasy" hidden><svg class="icon"><use href="/assets/icons.svg#x"/></svg></button>
     <button class="fab" id="fab-locate" type="button" aria-label="Moje poloha na mapě" title="Moje poloha"><svg class="icon"><use href="/assets/icons.svg#locate"/></svg></button>
+    <button class="fab fab-filter" id="filter-btn" type="button" title="Co zobrazit na mapě"><svg class="icon"><use href="/assets/icons.svg#layers"/></svg><span class="fab-count" id="filter-count" hidden></span></button>
 
     <section class="sheet" id="sheet" hidden aria-label="Informace o spoji">
       <button class="sheet-close" id="sheet-close" type="button" aria-label="Zavřít"><svg class="icon"><use href="/assets/icons.svg#x"/></svg></button>
@@ -146,6 +147,22 @@
     </ul>
     <p class="fine">Neoficiální projekt, bez spojení s Dopravou Ústeckého kraje, DPmÚL ani Správou železnic. Na kritické cesty se spoléhej na oficiální zdroje.</p>
     <button class="btn btn-primary" value="ok" autofocus>Začít</button>
+  </form>
+</dialog>
+
+<dialog class="mini-dlg" id="filter-dlg" aria-labelledby="filter-title">
+  <form method="dialog">
+    <h2 id="filter-title">Co zobrazit na mapě</h2>
+    <div id="filter-list" class="filter-list"></div>
+    <div class="dlg-actions"><button type="button" class="link-btn" id="filter-all">Vybrat vše</button><button class="btn btn-primary" value="ok">Hotovo</button></div>
+  </form>
+</dialog>
+
+<dialog class="mini-dlg" id="choose-dlg" aria-labelledby="choose-title">
+  <form method="dialog">
+    <h2 id="choose-title">Které vozidlo?</h2>
+    <ul id="choose-list" class="choose-list"></ul>
+    <div class="dlg-actions"><button class="btn" value="cancel">Zrušit</button></div>
   </form>
 </dialog>
 

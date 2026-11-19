@@ -7,3 +7,6 @@ public/data/*.bin
 .env
 .env.*
 !.env.example
+
+# celostátní jízdní řád a tvary tras pro server (npm run data)
+/data/

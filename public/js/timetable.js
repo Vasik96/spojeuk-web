@@ -9,6 +9,7 @@ export class Timetable {
   constructor(data) {
     this.meta = data.meta;
     this.agencies = data.agencies;
+    this.trainLines = data.trainLines || {};   // číslo vlaku → linka (celá síť, i vlaky mimo oblast)
 
     /** @type {{id:number,name:string,place:string,lat:number,lng:number,inreg:boolean}[]} index = id (0 je prázdné) */
     this.stops = [null];

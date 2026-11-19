@@ -22,6 +22,8 @@ Při prvním startu bez dat se jízdní řády a trasy stáhnou samy. Server kon
 | Hledání | `public/js/planner.js` | RAPTOR, přestupy ≥ 120 s, pěšky do 250 m. Běží v prohlížeči, tedy offline |
 | Napovídání | `public/js/suggest.js` | používání → vzdálenost → zbytek |
 | Živá vozidla | `lib/hub.mjs`, `public/js/live.js` | server čte sloučená vozidla ze `spoje-feed` (`/api/vehicles`), klient je páruje se spoji |
+| Vozidla mimo oblast | `lib/trip-lookup.mjs` | `GET /api/vehicle-trip`: spoj, zastávky a tvar trasy z celostátního jízdního řádu (`data/timetable.sqlite` + tvary tras, stahuje `npm run data`), párování jako v appce |
+| Vozidla na mapě | `public/js/vehicle-layer.js` | canvas nad mapou: tečky / štítky, barvy podle druhu, prolínání, plynulý pohyb, filtr |
 | Mapa | `public/js/map.js` | vlastní engine (dlaždice, značky, čáry, pinch/drag), bez knihoven |
 | Server | `server.mjs` | statické soubory (brotli/gzip, CSP) + `GET /api/vehicles`, `GET /api/health` |
 

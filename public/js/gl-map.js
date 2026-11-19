@@ -1,6 +1,7 @@
 // Mapa na MapLibre GL JS (stejný engine jako v Android appce). Tenký obal se stejným API jako dřívější
 // vlastní engine: setView, fitBounds, addMarker, addPolyline, setTheme, on('click' | 'tilesfailed').
-// Plynulé přibližování, setrvačnost a gesta řeší MapLibre; vozidla jsou DOM značky s animací mezi polohami.
+// Plynulé přibližování, setrvačnost a gesta řeší MapLibre. Vozidla kreslí vehicle-layer.js do vlastního canvasu
+// (DOM značky jsou jen pro pár bodů trasy a polohu uživatele).
 import { loadMapConfig, softenDark } from './map-style.js';
 
 const ml = () => window.maplibregl;
