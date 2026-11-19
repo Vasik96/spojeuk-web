@@ -794,10 +794,9 @@ function renderSheet() {
   // bez čísla vozu (metro PID ho nehlásí): server vůz sleduje podle spoje, uid "gtrip:<GTFS spoj>"
   const tripRef = !v.id && String(v.uid).startsWith('gtrip:') ? String(v.uid).slice(6) : null;
   const idLine = v.id ? `ID vozidla: ${esc(vehicleSource(v) + ':' + v.id)}` : tripRef ? `Spoj: ${esc(tripRef)}` : 'ID vozidla: není dostupné';
-  const modeName = mode !== 'bus' && mode !== 'train' && MODE_LABEL[mode] ? `${MODE_LABEL[mode]} ` : '';
   $('#sheet-body').innerHTML = `
     <h3>Informace o spoji</h3>
-    <span class="big-badge" style="background:${st.color};color:${st.darkText ? '#000' : '#fff'};${ring}">${mode === 'train' ? icon('train') : mode === 'bus' ? icon('bus') : ''}${esc(modeName + v.line)}</span>
+    <span class="big-badge" style="background:${st.color};color:${st.darkText ? '#000' : '#fff'};${ring}">${icon(MODE_ICON[kindOf(v)] || 'bus')}${esc(v.line)}</span>
     <p class="age" style="margin-top:.7rem">${idLine}</p>
     ${!v.id && mode === 'metro' ? '<p class="age">Metro nehlásí číslo soupravy, vůz se sleduje podle spoje.</p>' : ''}
     <p class="age">Zdroj polohy: ${esc(sourceLabel(v))}</p>
