@@ -6,7 +6,7 @@ import { suggest, nearestPlaces } from './suggest.js';
 import { LiveTracker, fetchVehicles, sourceStatusParts, vehicleUid } from './live.js';
 import { MapView } from './gl-map.js';
 import { VehicleLayer, CATEGORIES, vehicleStyle, vehicleMode, lateMinutes, STYLES, LATE_COLOR } from './vehicle-layer.js';
-import { ShapeStore, legRoute, osrmRoute } from './shapes.js';
+import { ShapeStore, legRoute, osrmRoute, footRoute, footDistances, WALK_M_PER_MIN } from './shapes.js';
 import { store } from './store.js';
 import {
   prettyName, splitStopName, stopLabel, hhmm, pragueNow, addDays, dayDiff, dayToIso, isoToDay, fmtMinutes, fmtDist,
@@ -256,10 +256,18 @@ async function useMyLocation() {
       return formMessage(`Poloha je jen přibližná (± ${accText(loc.acc)}), nejspíš podle IP adresy. Zapni určování polohy (GPS) nebo zastávku vyber ručně.`);
     }
     S.loc = loc;
-    const [n] = nearestPlaces(S.index, S.loc.lat, S.loc.lng, 1);
-    if (!n || n.dist > 5000) return formMessage('V okolí jsme nenašli žádnou zastávku.');
-    $('[data-field="from"]').setValue(n.place);
-    formMessage(`Nejbližší zastávka: ${stopLabel(prettyName(n.place))} (${fmtDist(n.dist)} vzdušnou čarou).`, 'info');
+    const cands = nearestPlaces(S.index, loc.lat, loc.lng, 6).filter((c) => c.dist <= 5000);
+    if (!cands.length) return formMessage('V okolí jsme nenašli žádnou zastávku.');
+    // nejbližší PĚŠKY (jako v appce): zastávka za řekou nebo kolejištěm bývá vzdušnou čarou blízko, ale cesta dlouhá
+    formMessage('Hledám nejbližší zastávku pěšky…', 'info');
+    const walk = await footDistances([loc.lat, loc.lng], cands.map((c) => [c.lat, c.lng]));
+    let best = cands[0], walkM = null;
+    if (walk) cands.forEach((c, i) => { if (walk[i] != null && (walkM == null || walk[i] < walkM)) { walkM = walk[i]; best = c; } });
+    $('[data-field="from"]').setValue(best.place);
+    const how = walkM != null
+      ? `${fmtDist(walkM)} pěšky, asi ${Math.max(1, Math.round(walkM / WALK_M_PER_MIN))}${NBSP}min`
+      : `${fmtDist(best.dist)} vzdušnou čarou`;
+    formMessage(`Nejbližší zastávka: ${stopLabel(prettyName(best.place))} (${how}).`, 'info');
   } catch (e) { formMessage(e.message); }
 }
 
@@ -537,7 +545,13 @@ function showJourneyOnMap(d) {
   d.legs.forEach((l) => {
     if (l.kind === 'walk') {
       const a = sp(l.from), b = sp(l.to);
-      if (a.hasCoords && b.hasCoords) S.overlay.lines.push(S.map.addPolyline([[a.lat, a.lng], [b.lat, b.lng]], { color: '#6a829b', width: 4, dash: '2 8', casing: null }));
+      if (a.hasCoords && b.hasCoords) {
+        const wl = S.map.addPolyline([[a.lat, a.lng], [b.lat, b.lng]], { color: '#6a829b', width: 4, dash: '2 8', casing: null });
+        S.overlay.lines.push(wl);
+        // pěší přesun po chodnících místo rovné čáry, jakmile ho pěší OSRM vrátí
+        const gen = overlayGen;
+        footRoute([a.lat, a.lng], [b.lat, b.lng]).then((r) => { if (r && gen === overlayGen) wl.setPoints(r.pts); });
+      }
       return;
     }
     const t = tt.trips[l.tid];

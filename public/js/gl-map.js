@@ -238,17 +238,19 @@ class GlLine {
 
   _add(map, s, id) {
     map.addSource(id, { type: 'geojson', data: this._data() });
-    if (s.casing && !s.dash) map.addLayer({ id: `${id}-casing`, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': s.casing, 'line-width': s.width + 4, 'line-opacity': 0.85 } });
+    // trasy pod tečky vozidel (vrstva 'veh-dots' z vehicle-layer.js), vozidla zůstanou navrch jako v appce
+    const before = map.getLayer('veh-dots') ? 'veh-dots' : undefined;
+    if (s.casing && !s.dash) map.addLayer({ id: `${id}-casing`, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': s.casing, 'line-width': s.width + 4, 'line-opacity': 0.85 } }, before);
     map.addLayer({
       id: `${id}-line`, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': s.color, 'line-width': s.width, 'line-opacity': s.opacity, ...(s.dash ? { 'line-dasharray': [0.1, 2.2] } : {}) },
-    });
+    }, before);
     if (s.arrows) {
       map.addLayer({
         id: `${id}-arrows`, type: 'symbol', source: id,
         layout: { 'symbol-placement': 'line', 'symbol-spacing': 110, 'icon-image': 'route-arrow', 'icon-allow-overlap': true, 'icon-ignore-placement': true, 'icon-rotation-alignment': 'map' },
         paint: {},
-      });
+      }, before);
       map.setLayoutProperty(`${id}-arrows`, 'icon-size', ['interpolate', ['linear'], ['zoom'], 8, 0.32, 10, 0.45, 12, 0.6, 14, 0.78, 16, 0.95, 18, 1.1]);
     }
   }

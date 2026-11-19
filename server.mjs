@@ -49,7 +49,7 @@ const SECURITY = {
   'referrer-policy': 'strict-origin-when-cross-origin',
   'permissions-policy': 'geolocation=(self), camera=(), microphone=()',
   // MapLibre: styl a dlaždice z CARTO (a záložně OpenFreeMap), worker je vlastní soubor
-  'content-security-policy': "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://*.cartocdn.com https://tiles.openfreemap.org https://router.project-osrm.org; manifest-src 'self'; worker-src 'self' blob:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://*.cartocdn.com https://tiles.openfreemap.org https://router.project-osrm.org https://routing.openstreetmap.de; manifest-src 'self'; worker-src 'self' blob:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
 };
 
 // ───────────── živé polohy ─────────────

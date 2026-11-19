@@ -234,3 +234,44 @@ export async function osrmRoute(stops) {
   if (!r) osrmMem.delete(key); // příště zkusit znovu
   return r;
 }
+
+// ───────── pěší trasy (OSRM foot server, stejný jako OsrmClient v Android appce) ─────────
+const FOOT_BASE = 'https://routing.openstreetmap.de/routed-foot';
+export const WALK_M_PER_MIN = 80;   // ~4,8 km/h (duration z pěšího OSRM bývá nespolehlivá, appka počítá stejně)
+const footMem = new Map();
+const ll = (p) => `${p[1].toFixed(6)},${p[0].toFixed(6)}`;
+
+async function footFetch(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Pěší trasa z a do b ([lat,lng]): { pts: [[lat,lng]…], dist: m }, nebo null (volající nechá rovnou čáru). */
+export async function footRoute(a, b) {
+  const key = `${ll(a)};${ll(b)}`;
+  if (footMem.has(key)) return footMem.get(key);
+  const job = footFetch(`${FOOT_BASE}/route/v1/foot/${key}?overview=full&geometries=geojson`)
+    .then((j) => {
+      const r = j.routes?.[0];
+      const g = r?.geometry?.coordinates;
+      return g?.length >= 2 ? { pts: g.map((c) => [c[1], c[0]]), dist: r.distance } : null;
+    })
+    .catch(() => null);
+  footMem.set(key, job);
+  const r = await job;
+  if (!r) footMem.delete(key);
+  return r;
+}
+
+/** Pěší vzdálenosti (m) z `from` do každého z `tos` jedním dotazem; null, když server neodpoví. */
+export async function footDistances(from, tos) {
+  if (!tos.length) return [];
+  try {
+    const coords = [from, ...tos].map(ll).join(';');
+    const j = await footFetch(`${FOOT_BASE}/table/v1/foot/${coords}?sources=0&annotations=distance`);
+    const row = j.distances?.[0];
+    return Array.isArray(row) ? row.slice(1).map((d) => (Number.isFinite(d) ? d : null)) : null;
+  } catch { return null; }
+}
+

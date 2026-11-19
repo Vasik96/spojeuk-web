@@ -41,6 +41,6 @@ export function suggest(index, query, { usage = {}, loc = null, limit = 8 } = {}
 /** Nejbližší místo (a vzdálenost v m) k dané poloze. */
 export function nearestPlaces(index, lat, lng, limit = 5) {
   return index.filter((p) => p.hasCoords)
-    .map((p) => ({ place: p.place, dist: distanceM(lat, lng, p.lat, p.lng) }))
+    .map((p) => ({ place: p.place, lat: p.lat, lng: p.lng, dist: distanceM(lat, lng, p.lat, p.lng) }))
     .sort((a, b) => a.dist - b.dist).slice(0, limit);
 }
