@@ -246,3 +246,11 @@ body { overscroll-behavior: none; }
 .kind-ico .icon { width: 22px; height: 22px; }
 .kind-txt { min-width: 0; }
 .kind-txt strong, .kind-txt small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cat-btn { display: inline-flex; align-items: center; gap: .45rem; padding: .45rem .8rem; border: 1px solid var(--line); border-radius: 999px; background: var(--brand-50); color: var(--ink-2); font: inherit; font-size: .9rem; font-weight: 600; cursor: pointer; max-width: 100%; }
+.cat-btn .icon { width: 1.05rem; height: 1.05rem; flex: none; }
+.cat-btn .chev { width: .9rem; height: .9rem; }
+.cat-btn #mode-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cat-btn.on { background: var(--brand-100); color: var(--brand-700); border-color: transparent; }
+.cat-dots { display: inline-flex; gap: 3px; }
+.cat-dots .filter-dot { width: 10px; height: 10px; border-width: 1.5px; }
+

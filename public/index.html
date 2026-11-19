@@ -72,11 +72,7 @@
             <button type="button" role="radio" aria-checked="true" data-when="now">Teď</button>
             <button type="button" role="radio" aria-checked="false" data-when="custom">Jindy</button>
           </div>
-          <div class="seg" role="radiogroup" aria-label="Druh dopravy" id="mode-seg">
-            <button type="button" role="radio" aria-checked="true" data-mode="all">Vše</button>
-            <button type="button" role="radio" aria-checked="false" data-mode="bus">Autobusy</button>
-            <button type="button" role="radio" aria-checked="false" data-mode="train">Vlaky</button>
-          </div>
+          <button type="button" class="cat-btn" id="mode-btn" aria-haspopup="dialog"><svg class="icon"><use href="/assets/icons.svg#layers"/></svg><span id="mode-label">Všechny druhy</span><span class="cat-dots" id="mode-dots"></span><svg class="icon chev"><use href="/assets/icons.svg#chevron"/></svg></button>
         </div>
         <div class="when" id="when" hidden>
           <label>Datum <input type="date" id="date-input"></label>

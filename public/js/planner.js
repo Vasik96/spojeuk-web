@@ -6,7 +6,29 @@ export const NEXT_DAY_CUTOFF = 6 * 3600; // spoje po půlnoci, které se ještě
 const INF = 1_000_000_000;
 
 export const MODES = { ALL: 'all', BUS: 'bus', TRAIN: 'train' };
-const accepts = (mode, isTrain) => mode === MODES.ALL || (mode === MODES.TRAIN ? isTrain : !isTrain);
+export const CATS = ['bus', 'tram', 'metro', 'train'];
+
+/**
+ * Druh dopravy spoje pro filtr hledání (stejně jako TripTable.category v Android appce). Jízdní řád druh nemá:
+ * vlak podle čísla vlaku, metro = linky A/B/C DP hl. m. Prahy, tramvaj = jeho číselné linky pod 100, jinak bus.
+ */
+export function tripCategory(t) {
+  if (t.isTrain) return 'train';
+  if (/Prahy/.test(t.agency || '')) {
+    const l = String(t.line ?? '').trim();
+    if (/^[ABC]$/.test(l)) return 'metro';
+    if (/^\d+$/.test(l) && +l < 100) return 'tram';
+  }
+  return 'bus';
+}
+
+/** Filtr druhů: null = vše; Set druhů z dialogu, nebo dřívější hodnoty MODES ('bus' / 'train'). */
+const catSet = (mode) => {
+  if (mode == null || mode === MODES.ALL) return null;
+  const s = mode instanceof Set ? mode : new Set([mode]);
+  return s.size === 0 || CATS.every((c) => s.has(c)) ? null : s;
+};
+const accepts = (cats, t) => !cats || cats.has(t.cat ??= tripCategory(t));
 
 function lowerBound(arr, target) {
   let lo = 0, hi = arr.length;
@@ -61,6 +83,7 @@ export class Net {
    */
   raptor(srcs, dsts, t0, { kmax = 4, mode = MODES.ALL } = {}) {
     const tt = this.tt;
+    const cats = catSet(mode);
     const N = tt.stops.length;
     const foot = tt.foot;
     const arrs = Array.from({ length: kmax + 1 }, () => new Int32Array(N).fill(INF));
@@ -116,8 +139,8 @@ export class Net {
           if (p !== INF) {
             const col = pat.cols[i];
             let j = lowerBound(col, p + mt);
-            if (mode !== MODES.ALL) {
-              while (j < col.length && !accepts(mode, tt.trips[pat.tids[j]].isTrain)) j++;
+            if (cats) {
+              while (j < col.length && !accepts(cats, tt.trips[pat.tids[j]])) j++;
             }
             if (j < col.length && (trip < 0 || j < trip || (j === trip && p < boardPrev))) {
               trip = j; board = i; boardPrev = p;
@@ -242,8 +265,9 @@ export class Planner {
       t = Math.min(...js.map((j) => j.dep)) + 1;
     }
     const pruned = prune([...out.values()]);
-    return mode === MODES.ALL ? pruned
-      : pruned.filter((j) => j.legs.every((l) => l.kind !== 'ride' || accepts(mode, tt.trips[l.tid].isTrain)));
+    const cats = catSet(mode);
+    return !cats ? pruned
+      : pruned.filter((j) => j.legs.every((l) => l.kind !== 'ride' || accepts(cats, tt.trips[l.tid])));
   }
 
   /** Další spojení po posledním z již nalezených. */

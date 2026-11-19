@@ -1,7 +1,7 @@
 // Spoje UK: webová aplikace (vyhledávání spojení + živá mapa vozidel).
 import { CONFIG } from './config.js';
 import { loadTimetable } from './timetable.js';
-import { Planner, describeJourney, MODES } from './planner.js';
+import { Planner, describeJourney } from './planner.js';
 import { suggest, nearestPlaces } from './suggest.js';
 import { LiveTracker, fetchVehicles, sourceStatusParts, vehicleUid } from './live.js';
 import { MapView } from './gl-map.js';
@@ -21,7 +21,7 @@ const icon = (n, cls = '') => `<svg class="icon ${cls}" aria-hidden="true"><use 
 /** Stav aplikace. */
 const S = {
   tt: null, planner: null, live: null, index: [], map: null,
-  from: null, to: null, mode: MODES.ALL, when: 'now',
+  from: null, to: null, mode: null, when: 'now',   // mode: Set druhů dopravy, null = vše
   journeys: [], desc: new Map(), expanded: new Set(), query: null, loadingMore: false, noMoreEarlier: false,
   loc: null, vehicles: [], vlayer: null, selected: null, flashUid: null,
   overlay: { lines: [], markers: [] }, meMarker: null,
@@ -91,8 +91,41 @@ function loadFilter() {
   const set = new Set(f.filter((x) => ALL_CATS.includes(x)));
   return set.size === ALL_CATS.length ? null : set;
 }
+/**
+ * Dialog druhů dopravy: pro mapu i pro hledání spojení stejný (jako v Android appce).
+ * selected = Set druhů nebo null (vše); onChange dostane totéž při každé změně.
+ */
+function openCategoryDialog(title, selected, onChange, onClose, { allowEmpty = true } = {}) {
+  const dlg = $('#filter-dlg'), list = $('#filter-list');
+  $('#filter-title').textContent = title;
+  list.innerHTML = CATEGORIES.map((c) => `<label class="filter-row">
+      <input type="checkbox" value="${c.id}" ${!selected || selected.has(c.id) ? 'checked' : ''}>
+      <span class="filter-dot" style="background:${CAT_COLOR[c.id]}"></span>
+      <span><strong>${c.label}</strong>${c.note ? `<small>${c.note}</small>` : ''}</span></label>`).join('');
+  // hledání spojení: poslední zaškrtnutý druh nejde odebrat (hledat „ničím“ nedává smysl)
+  const lock = () => {
+    const on = $$('input:checked', list);
+    $$('input', list).forEach((i) => { i.disabled = !allowEmpty && on.length === 1 && i.checked; });
+  };
+  const apply = () => {
+    const on = $$('input:checked', list).map((i) => i.value);
+    lock();
+    onChange(on.length === ALL_CATS.length ? null : new Set(on));
+  };
+  list.onchange = (e) => {
+    if (!allowEmpty && !$$('input:checked', list).length) { e.target.checked = true; lock(); return; }
+    apply();
+  };
+  lock();
+  $('#filter-all').onclick = () => { $$('input', list).forEach((i) => { i.checked = true; }); apply(); };
+  dlg.addEventListener('close', () => onClose?.(), { once: true });
+  dlg.showModal();
+}
+
+const catSummary = (set) => (!set ? 'Všechny druhy' : set.size ? CATEGORIES.filter((c) => set.has(c.id)).map((c) => c.label).join(', ') : 'Nic');
+
 function setupFilter() {
-  const btn = $('#filter-btn'), dlg = $('#filter-dlg'), list = $('#filter-list');
+  const btn = $('#filter-btn');
   const sync = () => {
     const f = S.vlayer.filter;
     btn.classList.toggle('on', !!f);
@@ -100,22 +133,35 @@ function setupFilter() {
     $('#filter-count').textContent = f ? String(f.size) : '';
     $('#filter-count').hidden = !f;
   };
-  const render = () => {
-    const f = S.vlayer.filter;
-    list.innerHTML = CATEGORIES.map((c) => `<label class="filter-row">
-      <input type="checkbox" value="${c.id}" ${!f || f.has(c.id) ? 'checked' : ''}>
-      <span class="filter-dot" style="background:${CAT_COLOR[c.id]}"></span>
-      <span><strong>${c.label}</strong>${c.note ? `<small>${c.note}</small>` : ''}</span></label>`).join('');
-  };
-  const apply = () => {
-    const on = $$('input:checked', list).map((i) => i.value);
-    S.vlayer.setFilter(on.length === ALL_CATS.length ? null : new Set(on));
-    store.set('mapCats', on);
+  btn.addEventListener('click', () => openCategoryDialog('Co zobrazit na mapě', S.vlayer.filter, (set) => {
+    S.vlayer.setFilter(set);
+    store.set('mapCats', set ? [...set] : ALL_CATS);
     sync();
+  }));
+  sync();
+}
+
+/** Druhy dopravy pro hledání spojení: stejný dialog jako na mapě; pamatuje se, změna hledá znovu. */
+function setupModeFilter() {
+  const saved = store.get('searchCats', null);
+  if (Array.isArray(saved)) {
+    const set = new Set(saved.filter((x) => ALL_CATS.includes(x)));
+    S.mode = set.size === ALL_CATS.length || set.size === 0 ? null : set;
+  }
+  const sync = () => {
+    $('#mode-label').textContent = catSummary(S.mode);
+    $('#mode-btn').classList.toggle('on', !!S.mode);
+    $('#mode-btn').setAttribute('aria-label', `Druhy dopravy: ${catSummary(S.mode)}`);
+    $('#mode-dots').innerHTML = CATEGORIES.filter((c) => !S.mode || S.mode.has(c.id)).map((c) => `<span class="filter-dot" style="background:${CAT_COLOR[c.id]}"></span>`).join('');
   };
-  btn.addEventListener('click', () => { render(); dlg.showModal(); });
-  list.addEventListener('change', apply);
-  $('#filter-all').addEventListener('click', () => { $$('input', list).forEach((i) => { i.checked = true; }); apply(); });
+  $('#mode-btn').addEventListener('click', () => {
+    const before = catSummary(S.mode);
+    openCategoryDialog('Čím cestovat', S.mode, (set) => {
+      S.mode = set;
+      store.set('searchCats', set ? [...set] : ALL_CATS);
+      sync();
+    }, () => { if (catSummary(S.mode) !== before && S.query) runSearch(); }, { allowEmpty: false });
+  });
   sync();
 }
 
@@ -309,10 +355,7 @@ function setupForm() {
       $('#time-input').value = hhmm(n.sec);
     }
   }));
-  $$('[data-mode]').forEach((b) => b.addEventListener('click', () => {
-    S.mode = b.dataset.mode;
-    $$('[data-mode]').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
-  }));
+  setupModeFilter();
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); runSearch(); });
   $('#earlier').addEventListener('click', loadEarlier);
   $('#later').addEventListener('click', loadLater);
@@ -494,7 +537,7 @@ function renderResults(fresh = false) {
   if (!S.journeys.length) {
     res.hidden = true; empty.hidden = false;
     const q = S.query;
-    empty.innerHTML = `<strong>Spojení jsme nenašli</strong>${q.mode !== MODES.ALL ? 'Zkus zvolit „Vše“ místo omezení na jeden druh dopravy, nebo ' : 'Zkus '}posunout čas odjezdu${q.start.sec > 3600 * 20 ? ' (nebo vybrat zítřejší den)' : ''}.`;
+    empty.innerHTML = `<strong>Spojení jsme nenašli</strong>${q.mode && q.mode.size ? 'Zkus zvolit všechny druhy dopravy, nebo ' : 'Zkus '}posunout čas odjezdu${q.start.sec > 3600 * 20 ? ' (nebo vybrat zítřejší den)' : ''}.`;
     return;
   }
   empty.hidden = true; res.hidden = false;
