@@ -61,3 +61,22 @@
 
 	reverse_proxy web:8080
 }
+
+# Feed poloh vozidel (spoje-feed, Rust) běží na hostiteli mimo Docker (systemd služba spoje-feed, port 8787).
+# Web i Android appka ho čtou přes HTTPS na této doméně. Limity na IP si feed hlídá sám (RATE_PER_MIN,
+# TRUST_PROXY v jeho službě), Caddy jen obstará certifikát a předá adresu klienta v X-Forwarded-For.
+# Bez tohohle bloku Caddy pro doménu feedu nemá certifikát a appka i web hlásí "Zdroj: žádný".
+{$FEED_DOMAIN:feed.spojeuk.duckdns.org} {
+	encode zstd gzip
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 50mb
+			roll_keep 3
+		}
+		format json
+	}
+	request_body {
+		max_size 1KB
+	}
+	reverse_proxy {$FEED_UPSTREAM:host.docker.internal:8787}
+}

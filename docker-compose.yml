@@ -22,6 +22,11 @@ services:
       - "443:443/udp"
     environment:
       DOMAIN: ${DOMAIN:?Nastav DOMAIN v souboru .env}
+      # feed poloh (spoje-feed na hostiteli, mimo Docker); viz konec deploy/Caddyfile
+      FEED_DOMAIN: ${FEED_DOMAIN:-feed.spojeuk.duckdns.org}
+      FEED_UPSTREAM: ${FEED_UPSTREAM:-host.docker.internal:8787}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # z kontejneru na hostitele (spoje-feed)
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
