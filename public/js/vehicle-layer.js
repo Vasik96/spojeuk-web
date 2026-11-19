@@ -6,13 +6,15 @@
 // to, co je v záběru, a mapové jádro o vozidlech neví.
 //
 // Oddáleno (pod DOT_ZOOM) malé barevné tečky, přiblíženo štítky s číslem linky. Přechod mezi nimi i objevení
-// vozidel po otevření mapy se plynule prolíná ([Fade]), vozidla se mezi polohami ze serveru plynule posouvají.
+// vozidel po otevření mapy se plynule prolíná ([Fade]). Vozidla stojí na poslední poloze ze serveru (web nic
+// nepředpovídá) a k nové poloze se jen krátce přesunou ([MOVE_MS]).
 
 export const DOT_ZOOM = 11;           // stejně jako DOT_ZOOM_ML v appce (MapLibre má stejné zoomy jako web)
 const DOT_HYST = 0.15;                // hystereze proti blikání na hranici
 const LABEL_MAX = 1500;               // víc štítků v záběru = nečitelné a drahé: zůstanou tečky
 const TELEPORT_M = 3000;              // skok větší než tohle se neanimuje (jiný spoj, chyba polohy)
 const STALE_S = 60;                   // starší poloha: poloprůhledně (jako v appce)
+const MOVE_MS = 1000;                 // přesun na novou polohu ze serveru (bez předpovědi pohybu)
 
 /** Barvy a druhy vozidel (VehicleStyle v appce). */
 export const STYLES = {
@@ -208,12 +210,11 @@ const M_PER_DEG = 111_320;
 export class VehicleLayer {
   /**
    * @param {import('maplibre-gl').Map} map
-   * @param {{onTap?: (vehicles: object[]) => void, pollMs?: number}} opts
+   * @param {{onTap?: (vehicles: object[]) => void}} opts
    */
-  constructor(map, { onTap, pollMs = 8000 } = {}) {
+  constructor(map, { onTap } = {}) {
     this.map = map;
     this.onTap = onTap;
-    this.pollMs = pollMs;
     this.items = new Map();      // uid → {v, fx, fy, tx, ty, t0, dur, born, key}
     this.order = [];             // pevné pořadí kreslení (podle uid) = stabilní překrývání
     this.filter = null;          // Set kategorií, null = vše
@@ -262,8 +263,9 @@ export class VehicleLayer {
       const [cx, cy] = this._pos(it, now);
       const distM = Math.hypot((tx - cx) * 360 * M_PER_DEG * Math.cos((v.lat * Math.PI) / 180), (ty - cy) * 360 * M_PER_DEG);
       if (distM > TELEPORT_M) { it.fx = tx; it.fy = ty; it.dur = 0; }
-      else { it.fx = cx; it.fy = cy; it.dur = this.pollMs * 1.05; }
+      else { it.fx = cx; it.fy = cy; it.dur = MOVE_MS; }
       it.tx = tx; it.ty = ty; it.t0 = now;
+      this._moveUntil = now + MOVE_MS;
     }
     for (const uid of this.items.keys()) if (!seen.has(uid)) this.items.delete(uid);
     if (added || this.order.length !== this.items.size) this.order = [...this.items.keys()].sort();
@@ -297,7 +299,8 @@ export class VehicleLayer {
 
   _pos(it, now) {
     if (!it.dur) return [it.tx, it.ty];
-    const t = Math.min(1, (now - it.t0) / it.dur);
+    const l = Math.min(1, (now - it.t0) / it.dur);
+    const t = 1 - (1 - l) * (1 - l);   // zpomalení na konci (jako dřívější DOM značky)
     return [it.fx + (it.tx - it.fx) * t, it.fy + (it.ty - it.fy) * t];
   }
 
@@ -343,10 +346,13 @@ export class VehicleLayer {
     requestAnimationFrame(this._loop);
     if (!this.visible) return;
     if (this.map.isMoving()) return;   // při pohybu kamery kreslí 'render' (ve stejném snímku jako mapa)
-    // oddáleno stačí pohyb ~10× za vteřinu (tisíce teček), přiblíženo plynule každý snímek
+    // kreslí se jen při změně: přesun na novou polohu, prolínání, nové štítky, výběr (jinak se nic nehýbe)
+    const moving = now < (this._moveUntil || 0);
+    if (!this._dirty && !moving) return;
+    // oddáleno stačí přesun ~10× za vteřinu (tisíce teček), přiblíženo plynule každý snímek
     const z = this.map.getZoom();
-    const interval = this.fade.animating || this.labelQueue.size ? 0 : z < 9.5 ? 120 : z < DOT_ZOOM ? 50 : 0;
-    if (!this._dirty && now - (this._last || 0) < interval) return;
+    const interval = this.fade.animating || this.labelQueue.size || !moving ? 0 : z < 9.5 ? 100 : z < DOT_ZOOM ? 50 : 0;
+    if (now - (this._last || 0) < interval) return;
     this._draw(now, false);
   }
 

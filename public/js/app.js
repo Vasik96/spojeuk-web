@@ -67,7 +67,6 @@ function initMap() {
   S.map = new MapView($('#map'), { center: CONFIG.MAP_CENTER, zoom: 12, configUrl: CONFIG.MAP_CONFIG_URL, theme: resolvedTheme() });
   S.map.on('tilesfailed', () => { const o = $('#outage'); o.querySelector('span').textContent = 'Podkladovou mapu se nepodařilo načíst (blokátor reklam nebo síť?). Vozidla se zobrazují i tak.'; o.hidden = false; });
   S.vlayer = new VehicleLayer(S.map.map, {
-    pollMs: CONFIG.POLL_MS,
     onTap: (hits) => (hits.length > 1 ? chooseVehicle(hits) : selectVehicle(hits[0].uid)),
   });
   S.vlayer.setFilter(loadFilter());
