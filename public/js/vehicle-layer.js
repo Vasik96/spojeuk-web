@@ -1,17 +1,14 @@
-// Vozidla na mapě: GPU vrstvy MapLibre (jako vozidla na OpenStreetMap v Android appce).
+// Vozidla na mapě: vlastní WebGL vrstva uvnitř MapLibre (kreslí se v jednom snímku s mapou, na GPU).
 //
-// Dřív bylo každé vozidlo DOM značka (~3 000 elementů s celostátním feedem), pak canvas 2D: tisíce drawImage
-// za snímek stály na mobilu při zoomu desítky ms, nejvíc kolem přechodu teček na štítky. Teď jsou tečky vrstva
-// kruhů a štítky vrstva symbolů (obrázek štítku podle linky / barvy) nad jedním GeoJSON zdrojem, kreslí je GPU
-// spolu s mapou a zoom ani posun nestojí žádnou práci v JavaScriptu. Štítek je jeden obrázek (linka + barva + zpoždění),
-// takže se překrývající štítky kryjí celé (text + pilulka jako vrstva symbolů by text spodních štítků propouštěl).
-// Obrázky se chystají dopředu po dávkách, když se mapa nehýbe, a vrstvy se nikdy nevypínají (jen průhlednost):
-// zapnutí vrstvy i přidání obrázku znamená nové rozvržení symbolů, to dřív zasekávalo přechod teček na štítky.
-// Canvas kreslí jen vybrané vozidlo.
+// Historie: DOM značky (~3 000 elementů) a pak canvas 2D (tisíce drawImage za snímek) zasekávaly zoom na mobilu,
+// vrstvy MapLibre (GeoJSON) zase při každé změně dat znovu rozvrhovaly všechny štítky, takže pohyb vozidel
+// nešel animovat. Tady má každé vozidlo v GPU bufferu starou a novou polohu a čas začátku přesunu; přesun
+// (~1 s se zpomalením na konci, bez předpovědi, jako v Android appce) počítá vertex shader, za snímek se
+// v JavaScriptu nic nepřepočítává. Tečky = kruh ve fragment shaderu, štítky = obdélníky z atlasu textur
+// (štítky se kreslí dopředu po dávkách, mezitím tečka). Pevné pořadí kreslení = štítky se kryjí celé.
 //
-// Oddáleno (pod DOT_ZOOM) malé barevné tečky, přiblíženo štítky s číslem linky. Přechod mezi nimi i objevení
-// vozidel po otevření mapy se plynule prolíná ([Fade], průhlednost celé vrstvy). Vozidla stojí na poslední poloze
-// ze serveru: web nic nepředpovídá.
+// Oddáleno (pod DOT_ZOOM) tečky, přiblíženo štítky s číslem linky; přechod mezi nimi i objevení vozidel po otevření
+// mapy se plynule prolíná ([Fade], průhlednost celé vrstvy). Vybrané vozidlo kreslí canvas nad mapou.
 
 export const DOT_ZOOM = 11;           // stejně jako DOT_ZOOM_ML v appce (MapLibre má stejné zoomy jako web)
 const DOT_HYST = 0.15;                // hystereze proti blikání na hranici
@@ -193,18 +190,58 @@ const ease = (t) => t * t * (3 - 2 * t);
 
 // ───────────── vrstva ─────────────
 
-const DOT_SRC = 'veh-src';
-export const DOT_LAYER = 'veh-dots';
-export const LABEL_LAYER = 'veh-labels';
-const PEND_LAYER = 'veh-dots-pending';   // tečky vozidel, jejichž štítek ještě není nakreslený (v režimu štítků)
-const IMG_PREFIX = 'veh:';
-/** "#RRGGBB" → "rgba(r,g,b,a)" */
-const withAlpha = (hex, a) => `rgba(${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)},${a})`;
+export const GL_LAYER = 'veh-gl';
+const MOVE_MS = 1000;          // přesun na novou polohu ze serveru (bez předpovědi pohybu)
+const TELEPORT_M = 3000;       // větší skok se neanimuje (jiný spoj, chyba polohy)
+const M_PER_DEG = 111_320;
+const FLOATS = 18;             // na vrchol: from(2) to(2) t0(1) corner(2) half(2) uv(4) color(4) late(1)
+
+const rgba = (hex, a = 1) => [parseInt(hex.slice(1, 3), 16) / 255, parseInt(hex.slice(3, 5), 16) / 255, parseInt(hex.slice(5, 7), 16) / 255, a];
 const wxOf = (lng) => (lng + 180) / 360;
 const wyOf = (lat) => {
   const s = Math.min(0.9999, Math.max(-0.9999, Math.sin((lat * Math.PI) / 180)));
   return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
 };
+const easeOut = (l) => 1 - (1 - l) * (1 - l);   // zpomalení na konci (přesun vozidla)
+
+const VS = `
+attribute vec2 a_from; attribute vec2 a_to; attribute float a_t0; attribute vec2 a_corner; attribute vec2 a_half;
+attribute vec4 a_uv; attribute vec4 a_color; attribute float a_late;
+uniform mat4 u_matrix; uniform float u_time; uniform float u_dur; uniform vec2 u_vp; uniform float u_dpr;
+varying vec2 v_uv; varying vec2 v_local; varying vec4 v_color; varying float v_dot; varying float v_late;
+void main() {
+  float l = a_t0 < 0.0 ? 1.0 : clamp((u_time - a_t0) / u_dur, 0.0, 1.0);
+  float t = 1.0 - (1.0 - l) * (1.0 - l);
+  vec4 c = u_matrix * vec4(mix(a_from, a_to, t), 0.0, 1.0);
+  // střed na celé pixely displeje a velikost v celých pixelech = štítek 1:1 s atlasem (ostrý)
+  vec2 px = floor((c.xy / c.w * 0.5 + 0.5) * u_vp * u_dpr + 0.5);
+  vec2 q = (px + a_corner * a_half * u_dpr) / (u_vp * u_dpr) * 2.0 - 1.0;
+  gl_Position = vec4(q * c.w, c.z, c.w);
+  vec2 k = a_corner * 0.5 + 0.5;
+  v_uv = vec2(mix(a_uv.x, a_uv.z, k.x), mix(a_uv.w, a_uv.y, k.y));
+  v_local = a_corner * a_half;
+  v_color = a_color; v_dot = a_uv.x < 0.0 ? 1.0 : 0.0; v_late = a_late;
+}`;
+const FS = `
+precision mediump float;
+uniform sampler2D u_tex; uniform float u_opacity;
+varying vec2 v_uv; varying vec2 v_local; varying vec4 v_color; varying float v_dot; varying float v_late;
+void main() {
+  if (v_dot > 0.5) {
+    // tečka ~9 px se světlým okrajem; zpožděná tramvaj / metro: okraj červený a silnější (jako v appce)
+    float r = length(v_local);
+    float R = v_late > 0.5 ? 5.5 : 4.5;
+    float sw = v_late > 0.5 ? 2.2 : 1.2;
+    float outer = 1.0 - smoothstep(R - 0.6, R + 0.4, r);
+    float inner = 1.0 - smoothstep(R - sw - 0.5, R - sw + 0.5, r);
+    vec4 stroke = v_late > 0.5 ? vec4(0.827, 0.184, 0.184, 1.0) : vec4(1.0, 1.0, 1.0, 0.8);
+    vec4 col = mix(stroke, vec4(v_color.rgb, 1.0), inner);
+    float a = col.a * outer * v_color.a * u_opacity;
+    gl_FragColor = vec4(col.rgb * a, a);
+  } else {
+    gl_FragColor = texture2D(u_tex, v_uv) * u_opacity;   // atlas je s přednásobenou alfou
+  }
+}`;
 
 export class VehicleLayer {
   /**
@@ -214,14 +251,18 @@ export class VehicleLayer {
   constructor(map, { onTap } = {}) {
     this.map = map;
     this.onTap = onTap;
-    this.items = new Map();      // uid → { v, x, y (světové 0..1), style, late, line, key, color, cat, stale }
+    this.items = new Map();      // uid → { v, fx, fy, tx, ty (světové 0..1), t0, style, late, line, key, color, cat, stale }
     this.filter = null;          // Set kategorií, null = vše
     this.selected = null; this.flash = null;
     this.fade = new Fade();
     this.selBmp = new Map();     // štítky vybraného vozidla (canvas)
-    this.queue = new Set();      // klíče obrázků štítků k nakreslení (po dávkách, když se mapa nehýbe)
+    this.queue = new Set();      // klíče štítků k nakreslení (po dávkách)
+    this.uploads = [];           // nakreslené štítky čekající na nahrání do atlasu (v render)
+    this.rects = new Map();      // klíč štítku → místo v atlasu
     this.visible = true;
+    this._base = performance.now();
     this._dpr = Math.min(3, window.devicePixelRatio || 1);
+    this._rebuild = true;
 
     const cv = (this.canvas = document.createElement('canvas'));
     cv.className = 'veh-canvas';
@@ -230,69 +271,48 @@ export class VehicleLayer {
     this.g = cv.getContext('2d');
     this._resize();
     map.on('resize', () => this._resize());
-    map.on('render', () => this._draw(performance.now(), true));   // pohyb kamery: vybrané vozidlo ve snímku mapy
+    map.on('render', () => this._drawSelected());   // vybrané vozidlo ve stejném snímku jako mapa
     map.on('click', (e) => this._click(e));
     map.on('mousemove', (e) => { map.getCanvas().style.cursor = this.hitTest(e.point.x, e.point.y).length ? 'pointer' : ''; });
-    // vrstvy se přidávají znovu po výměně stylu (motiv)
-    map.on('style.load', () => { this._ready = false; this._ensureLayers(); this._prewarm(); });
-    map.on('styledata', () => this._ensureLayers());
-    map.on('styleimagemissing', (e) => this._imageMissing(e.id));
-    // do mapy jdou jen vozidla v okolí záběru; po posunu / oddálení mimo ně se zdroj doplní
-    map.on('moveend', () => { if (!this._boxCovers()) { this._push(); this._prewarm(); } });
+    // vlastní vrstvu po výměně stylu (motiv) MapLibre zahodí: přidá se znovu (GL prostředky se vytvoří v onAdd)
+    map.on('style.load', () => this._addLayer());
     this.fade.initDotMode(map.getZoom() < DOT_ZOOM);
-    this._ensureLayers();
+    this._addLayer();
     this._loop = this._loop.bind(this);
     requestAnimationFrame(this._loop);
   }
 
   // ───── data ─────
 
-  /** Nové polohy ze serveru: vozidla se přesunou rovnou na ně (žádná předpověď ani animace pohybu). */
+  /** Nové polohy ze serveru: každé vozidlo se k nové poloze plynule přesune (~1 s), nic se nepředpovídá. */
   setVehicles(list) {
+    const now = performance.now();
     const seen = new Set();
     for (const v of list) {
       seen.add(v.uid);
+      const x = wxOf(v.lng), y = wyOf(v.lat);
       let it = this.items.get(v.uid);
-      if (!it) { it = {}; this.items.set(v.uid, it); }
-      it.v = v; it.x = wxOf(v.lng); it.y = wyOf(v.lat);
+      if (!it) {
+        it = { fx: x, fy: y, tx: x, ty: y, t0: -1 };
+        this.items.set(v.uid, it);
+      } else if (it.tx !== x || it.ty !== y) {
+        const [cx, cy] = this._pos(it, now);
+        const dist = Math.hypot((x - cx) * 360 * M_PER_DEG * Math.cos((v.lat * Math.PI) / 180), (y - cy) * 360 * M_PER_DEG);
+        if (dist > TELEPORT_M) { it.fx = x; it.fy = y; it.t0 = -1; }
+        else { it.fx = cx; it.fy = cy; it.t0 = now; this._animUntil = now + MOVE_MS; }
+        it.tx = x; it.ty = y;
+      }
+      it.v = v;
       this._meta(it);
+      if (!this.rects.has(it.key)) this.queue.add(it.key);
     }
     for (const uid of this.items.keys()) if (!seen.has(uid)) this.items.delete(uid);
     if (this.items.size) this.fade.startAppear();
-    this._push();
-    this._prewarm();
-    this._dirty = true;
+    this._rebuild = true;
+    this._camKey = null;
+    this.map.triggerRepaint();
   }
 
-  /**
-   * Obrázky štítků vozidel v okolí záběru do fronty (chystají se v klidu po dávkách, viz _loop). Vozidlo
-   * dostane odkaz na obrázek (_push, vlastnost 'i') až když je hotový: jinak si MapLibre při prvním zobrazení
-   * řekl o stovky obrázků najednou a jejich nakreslení zaseklo mapu na několik sekund.
-   */
-  _prewarm() {
-    if (!this._ready) return;
-    // nejdřív vozidla v okolí záběru, pak všechna ostatní (Praha a další místa budou mít štítky hotové dřív, než
-    // tam uživatel dojede). Obrázek, na který zatím nic neodkazuje, MapLibre nic nestojí (žádné rozvržení).
-    const add = (it) => { if (!this.map.hasImage(it.key)) this.queue.add(it.key); };
-    for (const it of this._pushed || []) add(it);
-    for (const it of this.items.values()) add(it);
-  }
-
-  /** Oblast, pro kterou jsou vozidla v mapě: záběr zvětšený na každou stranu o celou jeho šířku / výšku. */
-  _viewBox() {
-    const b = this.map.getBounds();
-    const dLat = b.getNorth() - b.getSouth(), dLng = b.getEast() - b.getWest();
-    return { s: b.getSouth() - dLat, n: b.getNorth() + dLat, w: b.getWest() - dLng, e: b.getEast() + dLng };
-  }
-
-  _boxCovers() {
-    const box = this._box;
-    if (!box) return false;
-    const b = this.map.getBounds();
-    return b.getSouth() >= box.s && b.getNorth() <= box.n && b.getWest() >= box.w && b.getEast() <= box.e;
-  }
-
-  /** Vlastnosti vozidla pro kreslení, spočítané jednou při nové poloze (ne v každém snímku). */
   _meta(it) {
     const v = it.v;
     const style = vehicleStyle(v);
@@ -302,288 +322,341 @@ export class VehicleLayer {
     it.stale = v.ageSec >= STALE_S;
     it.color = STYLES[style].color;
     it.cat = vehicleCategory(v);
-    it.key = `${IMG_PREFIX}${it.line}|${style}|${it.late ? 1 : 0}|${it.stale ? 1 : 0}`;
+    it.key = `${it.line}|${style}|${it.late ? 1 : 0}|${it.stale ? 1 : 0}`;
+  }
+
+  /** Aktuální (animovaná) poloha ve světových souřadnicích 0..1. */
+  _pos(it, now) {
+    if (it.t0 < 0) return [it.tx, it.ty];
+    const l = Math.min(1, (now - it.t0) / MOVE_MS);
+    if (l >= 1) return [it.tx, it.ty];
+    const t = easeOut(l);
+    return [it.fx + (it.tx - it.fx) * t, it.fy + (it.ty - it.fy) * t];
   }
 
   vehicle(uid) { return this.items.get(uid)?.v; }
-  position(uid) { const v = this.items.get(uid)?.v; return v ? { lat: v.lat, lng: v.lng } : null; }
+  position(uid) {
+    const it = this.items.get(uid);
+    if (!it) return null;
+    const [x, y] = this._pos(it, performance.now());
+    return { lng: x * 360 - 180, lat: (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI };
+  }
 
-  setFilter(cats) { this.filter = cats; this._applyFilter(); this._dirty = true; }
-  setSelected(uid) { this.selected = uid; this._applyFilter(); this._dirty = true; }
-  setFlash(uid) { this.flash = uid; this._applyFilter(); this._dirty = true; }
+  setFilter(cats) { this.filter = cats; this._rebuild = true; this._camKey = null; this.map.triggerRepaint(); }
+  setSelected(uid) { this.selected = uid; this._rebuild = true; this.map.triggerRepaint(); }
+  setFlash(uid) { this.flash = uid; this._rebuild = true; this.map.triggerRepaint(); }
 
-  /** Mapa schovaná (jiná záložka): nic se nekreslí; po návratu se vozidla znovu plynule objeví. */
+  /** Mapa schovaná (jiná záložka): po návratu se vozidla znovu plynule objeví. */
   setVisible(on) {
     if (on === this.visible) return;
     this.visible = on;
     if (on) { this.fade.resetAppear(); if (this.items.size) this.fade.startAppear(); this._resize(); }
-    this._opa = null;
-    this._dirty = true;
-    if (!on) this._setOpacity(0, 0);
+    this.map.triggerRepaint();
   }
 
-  // ───── vrstvy MapLibre ─────
+  // ───── WebGL vrstva ─────
 
-  _ensureLayers() {
-    const m = this.map;
-    if (this._ready && m.getLayer(DOT_LAYER) && m.getLayer(LABEL_LAYER)) return;
+  _addLayer() {
+    if (this.map.getLayer(GL_LAYER)) return;
+    const self = this;
     try {
-      if (!m.getSource(DOT_SRC)) m.addSource(DOT_SRC, { type: 'geojson', data: this._geo || { type: 'FeatureCollection', features: [] } });
-      if (!m.getLayer(DOT_LAYER)) {
-        m.addLayer({
-          id: DOT_LAYER, type: 'circle', source: DOT_SRC,
-          paint: {
-            // tečka ~9 px se světlým okrajem; zpožděná tramvaj / metro: okraj červený a silnější
-            'circle-radius': 3.3,
-            'circle-color': ['get', 'c'],
-            'circle-stroke-width': ['case', ['get', 'l'], 2.2, 1.2],
-            'circle-stroke-color': ['case', ['get', 'l'], LATE_COLOR, 'rgba(255,255,255,0.8)'],
-            // průhlednost celé vrstvy je konstanta (změna za snímek při prolínání je levná); zastaralé polohy
-            // mají poloprůhlednost už v barvě, výraz podle dat by při každé změně přepočítal všechny tečky
-            'circle-opacity': 0,
-            'circle-stroke-opacity': 0,
-          },
-        });
-      }
-      if (!m.getLayer(PEND_LAYER)) {
-        const dots = m.getLayer(DOT_LAYER).serialize();
-        m.addLayer({ ...dots, id: PEND_LAYER, filter: ['!', ['has', 'i']] });
-      }
-      if (!m.getLayer(LABEL_LAYER)) {
-        m.addLayer({
-          id: LABEL_LAYER, type: 'symbol', source: DOT_SRC,
-          minzoom: Math.floor(DOT_ZOOM - 1),   // oddáleně se štítky vůbec nerozvrhují (jsou jen tečky)
-          layout: {
-            'icon-image': ['get', 'i'],
-            'icon-allow-overlap': true,
-            'icon-ignore-placement': true,
-            'symbol-z-order': 'source',   // pevné pořadí (podle uid) = stabilní překrývání
-          },
-          paint: { 'icon-opacity': 0 },
-        });
-      }
-      this._ready = true;
-      this._opa = null;
-      this._filterKey = null;
-      this._applyFilter();
-      this._dirty = true;
-    } catch { /* styl se ještě načítá: zkusí se znovu při 'styledata' */ }
+      this.map.addLayer({
+        id: GL_LAYER, type: 'custom', renderingMode: '2d',
+        onAdd(_map, gl) { self._glInit(gl); },
+        onRemove(_map, gl) { self._glFree(gl); },
+        render(gl, args) { self._render(gl, args); },
+      });
+    } catch { /* styl se ještě načítá: přidá se při 'style.load' */ }
   }
 
-  /**
-   * Vozidla do zdroje mapy. Jen v okolí záběru (jako appka): celá ČR (~3 000 vozidel) při každé aktualizaci znamenala
-   * nové rozdělení do dlaždic a rozvržení všech štítků, to byl pravidelný „záškub“ každých 8 s.
-   */
-  _push() {
-    const box = (this._box = this._viewBox());
-    const m = this.map;
-    const features = [], pushed = [];
-    let missing = false;
-    // pár nových štítků (nová linka, změna zpoždění) se nakreslí rovnou, ať po aktualizaci poloh stačí jedno
-    // setData (každé = nové rozvržení štítků); hodně chybějících (první příjezd jinam) se chystá po dávkách
-    const t0 = performance.now();
-    for (const uid of [...this.items.keys()].sort()) {
-      const it = this.items.get(uid), v = it.v;
-      if (v.lat < box.s || v.lat > box.n || v.lng < box.w || v.lng > box.e) continue;
-      pushed.push(it);
-      if (this._ready && !m.hasImage(it.key) && performance.now() - t0 < 8) { this.queue.delete(it.key); try { this._addImage(it.key); } catch { /* ignore */ } }
-      // zastaralá poloha: poloprůhledně (jako v appce), u tečky v barvě, u štítku v obrázku
-      const props = { u: uid, k: it.cat, l: it.late, c: it.stale ? withAlpha(it.color, 0.65) : it.color };
-      if (this._ready && m.hasImage(it.key)) props.i = it.key; else missing = true;
-      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [v.lng, v.lat] }, properties: props });
-    }
-    this._pushed = pushed;
-    this._missing = missing;
-    this._geo = { type: 'FeatureCollection', features };
-    m.getSource(DOT_SRC)?.setData(this._geo);
+  _glInit(gl) {
+    this.gl = gl;
+    const sh = (type, src) => {
+      const o = gl.createShader(type);
+      gl.shaderSource(o, src); gl.compileShader(o);
+      if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o));
+      return o;
+    };
+    const pr = gl.createProgram();
+    gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS));
+    gl.linkProgram(pr);
+    if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+    this.prog = pr;
+    this.attr = {};
+    for (const n of ['a_from', 'a_to', 'a_t0', 'a_corner', 'a_half', 'a_uv', 'a_color', 'a_late']) this.attr[n] = gl.getAttribLocation(pr, n);
+    this.uni = {};
+    for (const n of ['u_matrix', 'u_time', 'u_dur', 'u_vp', 'u_dpr', 'u_tex', 'u_opacity']) this.uni[n] = gl.getUniformLocation(pr, n);
+    this.bufDots = gl.createBuffer();
+    this.bufLabels = gl.createBuffer();
+    this.isGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+    this.vaoExt = this.isGL2 ? null : gl.getExtension('OES_vertex_array_object');
+    this.vao = this.isGL2 ? gl.createVertexArray() : this.vaoExt?.createVertexArrayOES() ?? null;
+    // atlas štítků: jedna textura, řádkové skládání; při zaplnění se začne znovu
+    this.atlasSize = Math.min(4096, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    this.tex = gl.createTexture();
+    this._atlasReset();
+    this._rebuild = true;
+    // obrázky v atlasu jsou pryč: nakreslit znovu
+    for (const it of this.items.values()) this.queue.add(it.key);
   }
 
-  /** Filtr druhů dopravy; vybrané vozidlo se z vrstev vynechá (kreslí ho canvas větší, s kroužkem). */
-  _applyFilter() {
-    if (!this._ready) return;
-    const cats = this.filter ? [...this.filter].sort() : null;
-    const hide = [this.selected, this.flash].filter(Boolean);
-    const key = JSON.stringify([cats, hide]);
-    if (key === this._filterKey) return;
-    this._filterKey = key;
-    const f = ['all'];
-    if (cats) f.push(['in', ['get', 'k'], ['literal', cats]]);
-    for (const u of hide) f.push(['!=', ['get', 'u'], u]);
+  _glFree(gl) {
     try {
-      for (const l of [DOT_LAYER, LABEL_LAYER]) this.map.setFilter(l, f.length > 1 ? f : null);
-      this.map.setFilter(PEND_LAYER, [...f, ['!', ['has', 'i']]]);
-    } catch { /* vrstva ještě není */ }
+      gl.deleteProgram(this.prog); gl.deleteBuffer(this.bufDots); gl.deleteBuffer(this.bufLabels); gl.deleteTexture(this.tex);
+      if (this.vao) { if (this.isGL2) gl.deleteVertexArray(this.vao); else this.vaoExt?.deleteVertexArrayOES(this.vao); }
+    } catch { /* ignore */ }
+    this.gl = null;
   }
 
-  /** Průhlednost teček a štítků (prolínání, objevení po otevření mapy), jen při změně. */
-  _setOpacity(dotA, labA) {
-    const d = Math.round(dotA * 100) / 100, l = Math.round(labA * 100) / 100;
-    const key = `${d}|${l}`;
-    if (!this._ready || key === this._opa) return;
-    this._opa = key;
-    try {
-      const m = this.map;
-      // jen průhlednost, viditelnost vrstev se nepřepíná: zapnutí vrstvy symbolů znamená nové rozvržení všech
-      // štítků (stovky ms na mobilu), právě to zasekávalo přechod mezi tečkami a štítky
-      m.setPaintProperty(DOT_LAYER, 'circle-opacity', d);
-      m.setPaintProperty(DOT_LAYER, 'circle-stroke-opacity', d);
-      m.setPaintProperty(LABEL_LAYER, 'icon-opacity', l);
-      // vozidla bez hotového štítku: tečka ve stejné průhlednosti, v jaké jsou vidět štítky
-      m.setPaintProperty(PEND_LAYER, 'circle-opacity', l);
-      m.setPaintProperty(PEND_LAYER, 'circle-stroke-opacity', l);
-    } catch { /* vrstva ještě není */ }
+  _atlasReset() {
+    const gl = this.gl;
+    const S = this.atlasSize;
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, S, S, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.rects.clear();
+    this.ax = 2; this.ay = 2; this.arow = 0;
+    this._rebuild = true;
   }
 
-  // ───── obrázky štítků ─────
-
-  /**
-   * Nakreslí štítek a předá ho MapLibre (ten si drží vlastní kopii). Všechny štítky se kreslí do jednoho sdíleného
-   * plátna v paměti procesoru (willReadFrequently): nové plátno pro každý štítek a čtení pixelů zpět z GPU stály
-   * ~2 ms na štítek, s ~1 300 různými štítky v ČR to byly sekundy práce při prvním příjezdu do Prahy.
-   */
-  _addImage(key) {
-    const m = this.map;
-    if (m.hasImage(key)) return;
+  /** Nakreslí štítek do sdíleného plátna v paměti procesoru (rychlé, ~0,3 ms) a uloží ho k nahrání do atlasu. */
+  _paint(key) {
     if (!this._scratch) {
       this._scratch = document.createElement('canvas');
       this._scratch.getContext('2d', { willReadFrequently: true });
     }
-    const [line, style, late, stale] = key.slice(IMG_PREFIX.length).split('|');
+    const [line, style, late, stale] = key.split('|');
     const lb = drawLabel(line, style, 0, late === '1', this._dpr, stale === '1' ? 0.65 : 1, this._scratch);
     const c = lb.img;
-    m.addImage(key, c.getContext('2d').getImageData(0, 0, c.width, c.height), { pixelRatio: this._dpr });
+    this.uploads.push({ key, data: c.getContext('2d').getImageData(0, 0, c.width, c.height) });
   }
 
-  /** MapLibre chce obrázek, který ještě nemá (předchystání nestihlo): nakreslí se hned. */
-  _imageMissing(id) {
-    if (!id.startsWith(IMG_PREFIX)) return;
-    this.queue.delete(id);
-    try { this._addImage(id); } catch { /* ignore */ }
-  }
-
-  _drain(budgetMs) {
-    if (!this.queue.size || !this._ready) return;
-    const t0 = performance.now();
-    for (const k of this.queue) {
-      this.queue.delete(k);
-      try { this._addImage(k); } catch { /* ignore */ }
-      if (performance.now() - t0 > budgetMs) break;
+  _upload(gl) {
+    if (!this.uploads.length) return;
+    const S = this.atlasSize;
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    for (const { key, data } of this.uploads) {
+      if (this.rects.has(key)) continue;
+      // sudé rozměry: polovina velikosti v celých pixelech (vertex shader kreslí od středu)
+      const w = data.width + (data.width & 1), h = data.height + (data.height & 1);
+      if (this.ax + w + 2 > S) { this.ax = 2; this.ay += this.arow + 2; this.arow = 0; }
+      if (this.ay + h + 2 > S) { this._atlasReset(); gl.bindTexture(gl.TEXTURE_2D, this.tex); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true); for (const it of this.items.values()) this.queue.add(it.key); break; }
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, this.ax, this.ay, gl.RGBA, gl.UNSIGNED_BYTE, data);
+      this.rects.set(key, { u0: this.ax / S, v0: this.ay / S, u1: (this.ax + w) / S, v1: (this.ay + h) / S, hw: w / 2 / this._dpr, hh: h / 2 / this._dpr });
+      this.ax += w + 2;
+      if (h > this.arow) this.arow = h;
     }
-    // hotové obrázky do zdroje JEDNÍM přepočtem, až má hotové štítky celý záběr (každé setData = nové rozvržení
-    // všech štítků; po dávkách 3× za vteřinu to v Praze zasekávalo mapu na několik sekund)
-    if (this._missing && this._pushed.every((it) => this.map.hasImage(it.key))) this._push();
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    this.uploads = [];
+    this._rebuild = true;
   }
 
-  // ───── kreslení ─────
+  /** Buffery vrcholů: tečky a štítky (štítek, který ještě není v atlasu, zastoupí tečka). Jen při změně dat. */
+  _build(gl) {
+    const list = [];
+    for (const uid of [...this.items.keys()].sort()) {
+      const it = this.items.get(uid);
+      if (this.filter && !this.filter.has(it.cat)) continue;
+      if (uid === this.selected || uid === this.flash) continue;   // vybrané kreslí canvas
+      list.push(it);
+    }
+    const now = performance.now();
+    const ox = (this._ox = this.map.getCenter ? wxOf(this.map.getCenter().lng) : 0.5);
+    const oy = (this._oy = wyOf(this.map.getCenter().lat));
+    const dots = new Float32Array(list.length * 6 * FLOATS);
+    const labs = new Float32Array(list.length * 6 * FLOATS);
+    const CORNERS = [-1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1];
+    const put = (arr, i, it, half, uv, col) => {
+      let o = i * 6 * FLOATS;
+      const t0 = it.t0 >= 0 && now - it.t0 < MOVE_MS ? it.t0 - this._base : -1;
+      for (let k = 0; k < 6; k++) {
+        arr[o++] = it.fx - ox; arr[o++] = it.fy - oy; arr[o++] = it.tx - ox; arr[o++] = it.ty - oy; arr[o++] = t0;
+        arr[o++] = CORNERS[k * 2]; arr[o++] = CORNERS[k * 2 + 1];
+        arr[o++] = half[0]; arr[o++] = half[1];
+        arr[o++] = uv[0]; arr[o++] = uv[1]; arr[o++] = uv[2]; arr[o++] = uv[3];
+        arr[o++] = col[0]; arr[o++] = col[1]; arr[o++] = col[2]; arr[o++] = col[3];
+        arr[o++] = it.late ? 1 : 0;
+      }
+    };
+    const DOT_UV = [-1, -1, -1, -1];
+    list.forEach((it, i) => {
+      const col = rgba(it.color, it.stale ? 0.65 : 1);
+      const dh = it.late ? 6.5 : 5.5;
+      put(dots, i, it, [dh, dh], DOT_UV, col);
+      const r = this.rects.get(it.key);
+      if (r) put(labs, i, it, [r.hw, r.hh], [r.u0, r.v0, r.u1, r.v1], col);
+      else put(labs, i, it, [dh, dh], DOT_UV, col);
+    });
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufDots); gl.bufferData(gl.ARRAY_BUFFER, dots, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufLabels); gl.bufferData(gl.ARRAY_BUFFER, labs, gl.DYNAMIC_DRAW);
+    this.count = list.length;
+    this.drawn = list;
+    this._rebuild = false;
+  }
+
+  _bindAttribs(gl, buf) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    const st = FLOATS * 4;
+    const a = this.attr;
+    const set = (loc, n, off) => { if (loc < 0) return; gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, n, gl.FLOAT, false, st, off * 4); };
+    set(a.a_from, 2, 0); set(a.a_to, 2, 2); set(a.a_t0, 1, 4); set(a.a_corner, 2, 5); set(a.a_half, 2, 7);
+    set(a.a_uv, 4, 9); set(a.a_color, 4, 13); set(a.a_late, 1, 17);
+  }
+
+  _render(gl, args) {
+    if (!this.prog) return;
+    const now = performance.now();
+    this._upload(gl);
+    if (this._rebuild) this._build(gl);
+
+    // režim podle zoomu a počtu vozidel v záběru (s hysterezí); počítá se jen při změně kamery nebo dat
+    const map = this.map, zoom = map.getZoom();
+    const camKey = `${zoom.toFixed(3)}|${map.getCenter().lng.toFixed(5)}|${map.getCenter().lat.toFixed(5)}|${this.w}x${this.h}`;
+    if (camKey !== this._camKey) {
+      this._camKey = camKey;
+      const b = map.getBounds();
+      let n = 0;
+      for (const it of this.drawn || []) { const v = it.v; if (v.lat >= b.getSouth() && v.lat <= b.getNorth() && v.lng >= b.getWest() && v.lng <= b.getEast()) n++; }
+      this._nVis = n;
+    }
+    const dotNow = this.fade.dotMode;
+    const zoomOk = dotNow ? zoom >= DOT_ZOOM + DOT_HYST : zoom >= DOT_ZOOM;
+    const countOk = (this._nVis || 0) <= (dotNow ? LABEL_MAX : LABEL_MAX * 1.2);
+    this.fade.setDotMode(!(zoomOk && countOk));
+    this.fade.tick(now);
+    const appear = this.visible ? this.fade.appear : 0;
+    const dotA = this.fade.dotAlpha * appear, labA = this.fade.labelAlpha * appear;
+
+    // MapLibre 5 dává matici pro pixely světa při aktuálním zoomu (0..512·2^zoom); vozidla jsou v souřadnicích 0..1
+    // relativně k počátku (přesnost float32 i při velkém přiblížení): M' = M · měřítko(ws) · posun(počátek)
+    const M0 = args.modelViewProjectionMatrix || args.defaultProjectionData?.mainMatrix;
+    const ws = 512 * 2 ** zoom;
+    const M = this._M || (this._M = new Float64Array(16));
+    for (let i = 0; i < 16; i++) M[i] = M0[i] * (i < 8 ? ws : 1);   // matice pro absolutní souřadnice 0..1
+    const ox = this._ox, oy = this._oy;
+    const m = this._m || (this._m = new Float32Array(16));
+    for (let i = 0; i < 12; i++) m[i] = M[i];
+    for (let r = 0; r < 4; r++) m[12 + r] = M[r] * ox + M[4 + r] * oy + M[12 + r];
+
+    if (this.count && (dotA > 0.003 || labA > 0.003)) {
+      if (this.vao) { if (this.isGL2) gl.bindVertexArray(this.vao); else this.vaoExt.bindVertexArrayOES(this.vao); }
+      gl.useProgram(this.prog);
+      gl.uniformMatrix4fv(this.uni.u_matrix, false, m);
+      gl.uniform1f(this.uni.u_time, now - this._base);
+      gl.uniform1f(this.uni.u_dur, MOVE_MS);
+      gl.uniform2f(this.uni.u_vp, this.w, this.h);
+      gl.uniform1f(this.uni.u_dpr, this._dpr);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.tex);
+      gl.uniform1i(this.uni.u_tex, 0);
+      gl.disable(gl.DEPTH_TEST); gl.disable(gl.STENCIL_TEST); gl.disable(gl.CULL_FACE);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      const pass = (buf, a) => {
+        if (a <= 0.003) return;
+        this._bindAttribs(gl, buf);
+        gl.uniform1f(this.uni.u_opacity, a);
+        gl.drawArrays(gl.TRIANGLES, 0, this.count * 6);
+      };
+      pass(this.bufDots, dotA);
+      pass(this.bufLabels, labA);
+      if (this.vao) { if (this.isGL2) gl.bindVertexArray(null); else this.vaoExt.bindVertexArrayOES(null); }
+    }
+    this._opa = [dotA, labA];
+    // další snímek, dokud se něco hýbe / prolíná / chystá
+    if (now < (this._animUntil || 0) || this.fade.animating || this.uploads.length || (this.flash && this.items.has(this.flash))) map.triggerRepaint();
+  }
+
+  // ───── štítky dopředu (mimo snímek mapy) ─────
 
   _resize() {
     const r = this.map.getContainer().getBoundingClientRect();
     const dpr = Math.min(3, window.devicePixelRatio || 1);
-    if (dpr !== this._dpr) { this._dpr = dpr; this.selBmp.clear(); }
+    if (dpr !== this._dpr) {
+      this._dpr = dpr; this.selBmp.clear();
+      if (this.gl) { this._atlasReset(); for (const it of this.items.values()) this.queue.add(it.key); }
+    }
     this.w = r.width; this.h = r.height;
     this.canvas.width = Math.round(r.width * dpr); this.canvas.height = Math.round(r.height * dpr);
     this.canvas.style.width = `${r.width}px`; this.canvas.style.height = `${r.height}px`;
-    this._dirty = true;
+    this._camKey = null;
   }
 
-  _loop(now) {
+  _loop() {
     requestAnimationFrame(this._loop);
-    // štítky dopředu po malých dávkách (při pohybu mapy menší, ať nebere čas snímkům mapy)
-    if (this.queue.size) this._drain(this.map.isMoving() ? 2 : 6);
-    if (!this.visible || this.map.isMoving()) return;   // při pohybu kamery kreslí 'render' (ve stejném snímku jako mapa)
-    if (!this._dirty) return;
-    this._draw(now, false);
+    if (!this.queue.size || !this.gl) return;
+    // štítky po malých dávkách (při pohybu mapy menších, ať nebere čas snímkům mapy); nahrají se v příštím snímku
+    const t0 = performance.now(), budget = this.map.isMoving() ? 2 : 6;
+    for (const k of this.queue) {
+      this.queue.delete(k);
+      if (!this.rects.has(k)) this._paint(k);
+      if (performance.now() - t0 > budget) break;
+    }
+    if (this.uploads.length) this.map.triggerRepaint();
   }
 
-  _draw(now, fromMap) {
-    if (!this.visible) return;
-    this._dirty = false;
-    const map = this.map, w = this.w, h = this.h;
-    const zoom = map.getZoom();
+  // ───── vybrané vozidlo (canvas) ─────
 
-    // režim podle zoomu a počtu vozidel v záběru (s hysterezí); počítá se jen při změně kamery nebo dat
-    const camKey = `${zoom.toFixed(3)}|${map.getCenter().lng.toFixed(5)}|${map.getCenter().lat.toFixed(5)}|${w}x${h}|${this.items.size}`;
-    if (camKey !== this._camKey) {
-      this._camKey = camKey;
-      const c = map.getCenter(), world = 512 * 2 ** zoom, cwx = wxOf(c.lng), cwy = wyOf(c.lat), hw = w / 2, hh = h / 2;
-      const vis = (this._vis = []);
-      for (const it of this.items.values()) {
-        if (this.filter && !this.filter.has(it.cat)) continue;
-        const x = (it.x - cwx) * world + hw, y = (it.y - cwy) * world + hh;
-        if (x >= -48 && x <= w + 48 && y >= -48 && y <= h + 48) vis.push(it);
-      }
-    }
-    const n = this._vis?.length ?? 0;
-    const dotNow = this.fade.dotMode;
-    const zoomOk = dotNow ? zoom >= DOT_ZOOM + DOT_HYST : zoom >= DOT_ZOOM;
-    const countOk = n <= (dotNow ? LABEL_MAX : LABEL_MAX * 1.2);
-    this.fade.setDotMode(!(zoomOk && countOk));
-
-    // přechod na štítky počká (nejvýš chvíli, viz Fade), než mají vozidla v záběru hotové obrázky štítků
-    let pending = false;
-    if (!this.fade.dotMode) for (const it of this._vis || []) if (!map.hasImage(it.key)) { pending = true; this.queue.add(it.key); }
-    this.fade.tick(now, pending);
-    const appear = this.fade.appear;
-    this._setOpacity(this.fade.dotAlpha * appear, this.fade.labelAlpha * appear);
-
-    // canvas: jen vybrané vozidlo (větší štítek s kroužkem, i v režimu teček); upozornění na vůz krátce bliká
+  _drawSelected() {
     const g = this.g, dpr = this._dpr;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, w, h);
+    g.clearRect(0, 0, this.w, this.h);
     this._hl = null;
+    if (!this.visible) return;
     const uid = this.flash || this.selected;
     const it = uid && this.items.get(uid);
-    if (it && (!this.filter || this.filter.has(it.cat))) {
-      const p = map.project([it.v.lng, it.v.lat]);
-      const flash = uid === this.flash;
-      const phase = flash ? (Math.floor(now / 400) % 2 === 0 ? 1 : 2) : 3;
-      const k = `${it.line}|${it.style}|${phase}|${it.late ? 1 : 0}`;
-      let b = this.selBmp.get(k);
-      if (!b) { b = drawLabel(it.line, it.style, phase, it.late, dpr); this.selBmp.set(k, b); }
-      g.globalAlpha = Math.max(appear, 0.01);
-      g.drawImage(b.img, Math.round(p.x - b.w / 2), Math.round(p.y - b.h / 2), b.w, b.h);
-      g.globalAlpha = 1;
-      this._hl = { x: p.x, y: p.y, hw: b.w / 2, hh: b.h / 2, v: it.v };
-      if (flash) this._dirty = true;   // blikání
-    }
-    if (this.fade.animating) this._dirty = true;
+    if (!it || (this.filter && !this.filter.has(it.cat))) return;
+    const now = performance.now();
+    const p = this.map.project(this.position(uid));
+    const flash = uid === this.flash;
+    const phase = flash ? (Math.floor(now / 400) % 2 === 0 ? 1 : 2) : 3;
+    const k = `${it.line}|${it.style}|${phase}|${it.late ? 1 : 0}`;
+    let b = this.selBmp.get(k);
+    if (!b) { b = drawLabel(it.line, it.style, phase, it.late, dpr); this.selBmp.set(k, b); }
+    g.globalAlpha = Math.max(this.fade.appear, 0.01);
+    g.drawImage(b.img, Math.round(p.x - b.w / 2), Math.round(p.y - b.h / 2), b.w, b.h);
+    g.globalAlpha = 1;
+    this._hl = { x: p.x, y: p.y, hw: b.w / 2, hh: b.h / 2, v: it.v };
   }
 
   // ───── ťuknutí ─────
 
-  /**
-   * Vozidla pod bodem (CSS px v mapě): víc přes sebe = všechna (výběr), jinak nejbližší s rezervou na prst.
-   * Dotaz jde přímo do vykreslených vrstev mapy (tečky / štítky), vybrané vozidlo z canvasu má přednost.
-   */
+  /** Obrazovková poloha vozidla (CSS px) z poslední matice snímku; null mimo záběr. */
+  _screen(it, now) {
+    const M = this._M;
+    if (!M) return null;
+    const [x, y] = this._pos(it, now);
+    const cx = M[0] * x + M[4] * y + M[12], cy = M[1] * x + M[5] * y + M[13], cw = M[3] * x + M[7] * y + M[15];
+    return [(cx / cw * 0.5 + 0.5) * this.w, (1 - (cy / cw * 0.5 + 0.5)) * this.h];
+  }
+
+  /** Vozidla pod bodem (CSS px v mapě): víc přes sebe = všechna (výběr), jinak nejbližší s rezervou na prst. */
   hitTest(px, py) {
     const hl = this._hl;
     if (hl && Math.abs(hl.x - px) <= hl.hw + 4 && Math.abs(hl.y - py) <= hl.hh + 3) return [hl.v];
-    if (!this._ready || !this.visible) return [];
-    const layers = [];
-    const o = (this._opa || '0|0').split('|').map(Number);
-    if (o[0] > 0) layers.push(DOT_LAYER);
-    if (o[1] > 0) layers.push(LABEL_LAYER, PEND_LAYER);
-    if (!layers.length) return [];
-    const uids = (fs) => [...new Set(fs.map((f) => f.properties.u))].map((u) => this.items.get(u)?.v).filter(Boolean);
-    let hits;
-    try {
-      // přesně pod prstem (štítek / tečka kryje bod); víc vozidel => výběr
-      hits = uids(this.map.queryRenderedFeatures([px, py], { layers }));
-      if (hits.length) return hits;
-      // jinak nejbližší v okolí (tečky jsou malé)
-      const r = 9;
-      const near = this.map.queryRenderedFeatures([[px - r, py - r], [px + r, py + r]], { layers });
-      if (!near.length) return [];
-      let best = null, bestD = Infinity;
-      for (const f of near) {
-        const v = this.items.get(f.properties.u)?.v;
-        if (!v) continue;
-        const p = this.map.project([v.lng, v.lat]);
-        const d = (p.x - px) ** 2 + (p.y - py) ** 2;
-        if (d < bestD) { bestD = d; best = v; }
-      }
-      return best ? [best] : [];
-    } catch { return []; }
+    if (!this.visible || !this._opa || !this.drawn) return [];
+    const labels = this._opa[1] > 0.5;
+    const now = performance.now();
+    let best = null, bestD = Infinity;
+    const covering = [];
+    for (let i = this.drawn.length - 1; i >= 0; i--) {   // odshora (poslední kreslené je navrchu)
+      const it = this.drawn[i];
+      const s = this._screen(it, now);
+      if (!s) continue;
+      const r = labels ? this.rects.get(it.key) : null;
+      const hw = r ? r.hw : 4.5, hh = r ? r.hh : 4.5;
+      const dx = Math.abs(s[0] - px), dy = Math.abs(s[1] - py);
+      const dotLike = !r;
+      if (dx > hw + (dotLike ? 7 : 4) || dy > hh + (dotLike ? 7 : 3)) continue;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = it.v; }
+      if (dx <= hw && dy <= hh) covering.push(it.v);
+    }
+    if (covering.length >= 2) return covering;
+    return best ? [best] : [];
   }
 
   _click(e) {
@@ -594,5 +667,5 @@ export class VehicleLayer {
     this.onTap?.(hits);
   }
 
-  destroy() { this.canvas.remove(); this.items.clear(); }
+  destroy() { this.canvas.remove(); this.items.clear(); try { this.map.removeLayer(GL_LAYER); } catch { /* ignore */ } }
 }

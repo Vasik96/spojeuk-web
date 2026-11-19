@@ -238,8 +238,8 @@ class GlLine {
 
   _add(map, s, id) {
     map.addSource(id, { type: 'geojson', data: this._data() });
-    // trasy pod tečky vozidel (vrstva 'veh-dots' z vehicle-layer.js), vozidla zůstanou navrch jako v appce
-    const before = map.getLayer('veh-dots') ? 'veh-dots' : undefined;
+    // trasy pod vozidly (vrstva 'veh-gl' z vehicle-layer.js), vozidla zůstanou navrch jako v appce
+    const before = map.getLayer('veh-gl') ? 'veh-gl' : undefined;
     if (s.casing && !s.dash) map.addLayer({ id: `${id}-casing`, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': s.casing, 'line-width': s.width + 4, 'line-opacity': 0.85 } }, before);
     map.addLayer({
       id: `${id}-line`, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' },
