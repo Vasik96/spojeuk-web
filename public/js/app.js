@@ -160,7 +160,7 @@ function openCategoryDialog(title, selected, onChange, onClose, { allowEmpty = t
   lock();
   $('#filter-all').onclick = () => { $$('input', list).forEach((i) => { i.checked = true; }); apply(); };
   dlg.addEventListener('close', () => onClose?.(), { once: true });
-  dlg.showModal();
+  showDialog(dlg);
 }
 
 const catSummary = (set) => (!set ? 'Všechny druhy' : set.size ? CATEGORIES.filter((c) => set.has(c.id)).map((c) => c.label).join(', ') : 'Nic');
@@ -243,7 +243,7 @@ function chooseVehicle(hits) {
     animateDialogClose(dlg);
     selectVehicle(hits[+b.dataset.i].uid);
   };
-  dlg.showModal();
+  showDialog(dlg);
 }
 
 // ───────────── napovídání zastávek ─────────────
@@ -887,13 +887,31 @@ $('#fab-locate').addEventListener('click', async () => {
 // ───────────── dialogy: plynulé zavření ─────────────
 // Formulář s method="dialog" i Escape by dialog zavřely okamžitě; nejdřív krátká animace, pak close().
 function animateDialogClose(dlg, value) {
-  if (dlg._closing) return;
+  if (dlg._closing || !dlg.open) return;
   if (reduceMotion()) { dlg.close(value); return; }
   dlg._closing = true;
   dlg.classList.add('closing');
-  const done = () => { dlg._closing = false; dlg.classList.remove('closing'); dlg.close(value); };
-  dlg.addEventListener('animationend', done, { once: true });
-  setTimeout(() => { if (dlg._closing) done(); }, 260);   // pojistka, kdyby animace neproběhla
+  // Dokončí se buď koncem animace zavírání, nebo pojistkou, a posluchač se pokaždé odebere. Dřív po pojistce zůstal
+  // viset a při dalším otevření ho spustil konec animace OTEVŘENÍ: dialog se hned po otevření sám zavřel.
+  let timer = 0;
+  const onEnd = (e) => { if (e.target === dlg && e.animationName === 'dlg-out') done(); };
+  const done = () => {
+    if (!dlg._closing) return;
+    dlg._closing = false;
+    dlg.removeEventListener('animationend', onEnd);
+    clearTimeout(timer);
+    dlg.classList.remove('closing');
+    if (dlg.open) dlg.close(value);
+  };
+  dlg._finishClose = done;
+  dlg.addEventListener('animationend', onEnd);
+  timer = setTimeout(done, 300);   // pojistka, kdyby animace neproběhla (pozadí, zatížený telefon)
+}
+
+/** Otevře dialog; rozběhnuté zavírání nejdřív dokončí (showModal na otevřený dialog by vyhodil chybu). */
+function showDialog(dlg) {
+  if (dlg._closing) dlg._finishClose?.();
+  if (!dlg.open) dlg.showModal();
 }
 for (const dlg of $$('dialog')) {
   dlg.addEventListener('cancel', (e) => { e.preventDefault(); animateDialogClose(dlg, 'cancel'); });
@@ -908,8 +926,8 @@ function setupWelcome() {
   const dlg = $('#welcome');
   if (!dlg || typeof dlg.showModal !== 'function') return;
   dlg.addEventListener('close', () => store.setWelcomed());
-  $('#about-btn')?.addEventListener('click', () => dlg.showModal());
-  if (!store.welcomed()) dlg.showModal();
+  $('#about-btn')?.addEventListener('click', () => showDialog(dlg));
+  if (!store.welcomed()) showDialog(dlg);
 }
 
 // ───────────── start ─────────────

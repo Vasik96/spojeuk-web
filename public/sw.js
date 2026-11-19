@@ -1,5 +1,5 @@
 // Service worker: aplikace a jízdní řády fungují offline (živé polohy a dlaždice mapy vždy ze sítě).
-const VERSION = 'v28';
+const VERSION = 'v29';
 const CACHE = `spojeuk-${VERSION}`;
 const SHELL = [
   '/', '/css/base.css', '/css/app.css', '/assets/icons.svg', '/assets/logo.svg', '/assets/favicon.svg', '/manifest.webmanifest',
