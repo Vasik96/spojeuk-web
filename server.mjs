@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { Hub } from './lib/hub.mjs';
+import { Hub, SERVER_BASE } from './lib/hub.mjs';
 import { mockSnapshot } from './lib/mock.mjs';
 import { createLimits, routeClass, clientIp, ipKey } from './lib/ratelimit.mjs';
 import { TripLookup } from './lib/trip-lookup.mjs';
@@ -84,7 +84,26 @@ function getLookup() {
 function reloadLookup() { const old = lookup; lookup = null; tripCache.clear(); old?.close(); getLookup(); }
 
 const tripCache = new Map(); // dotaz (zaokrouhlený) → { at, body }
+/** Plzeň (PMDP): zastávky a tvar trasy přímo od dopravce přes feed server (v celostátním řádu jsou pod jinými čísly). */
+async function pmdpTripJson(conn) {
+  if (!/^-?\d{1,13}$/.test(conn)) return { status: 400, body: '{"error":"špatné číslo spoje"}' };
+  const key = `pmdp|${conn}`;
+  const hit = tripCache.get(key);
+  if (hit && Date.now() - hit.at < 300_000) return { status: 200, body: hit.body };
+  try {
+    const res = await fetch(`${env.SERVER_BASE || SERVER_BASE}/api/trip/pmdp?conn=${conn}`, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) return { status: 200, body: '{"trip":null}' };
+    const body = await res.text();
+    if (tripCache.size > 5000) tripCache.clear();
+    tripCache.set(key, { at: Date.now(), body });
+    return { status: 200, body };
+  } catch {
+    return { status: 502, body: '{"error":"feed server nedostupný"}' };
+  }
+}
+
 async function vehicleTripJson(q) {
+  if (q.get('pmdp')) return pmdpTripJson(String(q.get('pmdp')));
   const num = (k) => { const x = Number(q.get(k)); return Number.isFinite(x) ? x : null; };
   const v = {
     line: String(q.get('line') || '').slice(0, 20), lat: num('lat'), lng: num('lng'), delay: num('delay') || 0,

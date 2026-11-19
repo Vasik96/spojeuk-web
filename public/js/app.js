@@ -819,20 +819,23 @@ function renderSheet() {
 
 /** Spoje vozidel mimo oblast ze serveru (uid → { at, data, pending }); dohledání se opakuje nejdřív po minutě. */
 const remoteTrips = new Map();
+// Plzeň: spoj se pozná podle čísla spoje PMDP (trip), při změně spoje se dohledá hned znovu
+const remoteKey = (v) => (v.source === 'pmdp' && v.trip ? `${v.uid}|${v.trip}` : v.uid);
 function remoteDetail(v) {
-  const c = remoteTrips.get(v.uid);
+  const c = remoteTrips.get(remoteKey(v));
   if ((!c || Date.now() - c.at > 60_000) && !c?.pending) fetchRemoteTrip(v);
   if (c?.data) return S.live.detailFromRemote(v, c.data);
   return c?.pending && !c.at ? { trip: null, pending: true } : null;
 }
 async function fetchRemoteTrip(v) {
-  const uid = v.uid, prev = remoteTrips.get(uid);
+  const uid = remoteKey(v), prev = remoteTrips.get(uid);
   remoteTrips.set(uid, { at: prev?.at || 0, data: prev?.data || null, pending: true });
   const q = new URLSearchParams({
     line: v.line ?? '', lat: v.lat, lng: v.lng, delay: v.delay || 0, dest: v.dest || '', mode: vehicleMode(v),
     train: v.train ? '1' : '0', num: v.train ? v.cis || '' : '',
   });
   if (v.heading != null) q.set('heading', v.heading);
+  if (v.source === 'pmdp' && v.trip) q.set('pmdp', v.trip);
   let data = prev?.data || null;
   try {
     const res = await fetch(`${CONFIG.API_BASE}/api/vehicle-trip?${q}`, { cache: 'no-store' });
@@ -840,7 +843,7 @@ async function fetchRemoteTrip(v) {
   } catch { /* offline: zůstane poslední známý */ }
   if (remoteTrips.size > 300) remoteTrips.clear();
   remoteTrips.set(uid, { at: Date.now(), data, pending: false });
-  if (S.selected === uid) renderSheet();
+  if (S.selected === v.uid) renderSheet();
 }
 
 function drawVehicleRoute(d) {
