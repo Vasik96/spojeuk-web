@@ -105,7 +105,7 @@ function roundRect(g, x, y, w, h, r) {
  */
 const meas = canvas(1, 1).getContext('2d');
 
-function drawLabel(line, styleKey, phase, late, dpr, alpha = 1) {
+function drawLabel(line, styleKey, phase, late, dpr, alpha = 1, target = null) {
   if (phase === 3) return drawSelected(line, styleKey, late, dpr);
   const st = STYLES[styleKey] || STYLES.BUS;
   const hl = phase !== 0;
@@ -124,8 +124,11 @@ function drawLabel(line, styleKey, phase, late, dpr, alpha = 1) {
   const pillW = Math.max(36, Math.ceil(tw + pad));
   const ring = late && !hl ? 4 : 0;
   const w = pillW + 2 * ring, h = hPx + 2 * ring;
-  const c = canvas(w * dpr, h * dpr);
+  let c;
+  if (target) { c = target; c.width = Math.max(1, Math.ceil(w * dpr)); c.height = Math.max(1, Math.ceil(h * dpr)); }   // změna rozměru = čisté plátno
+  else c = canvas(w * dpr, h * dpr);
   const g = c.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
   g.scale(dpr, dpr);
   g.globalAlpha = alpha;   // zastaralá poloha: poloprůhledný štítek (jako v appce)
   if (ring) { g.fillStyle = LATE_COLOR; roundRect(g, 0, 0, w, h, h / 2); g.fill(); }
@@ -268,7 +271,11 @@ export class VehicleLayer {
    */
   _prewarm() {
     if (!this._ready) return;
-    for (const it of this._pushed || []) if (!this.map.hasImage(it.key)) this.queue.add(it.key);
+    // nejdřív vozidla v okolí záběru, pak všechna ostatní (Praha a další místa budou mít štítky hotové dřív, než
+    // tam uživatel dojede). Obrázek, na který zatím nic neodkazuje, MapLibre nic nestojí (žádné rozvržení).
+    const add = (it) => { if (!this.map.hasImage(it.key)) this.queue.add(it.key); };
+    for (const it of this._pushed || []) add(it);
+    for (const it of this.items.values()) add(it);
   }
 
   /** Oblast, pro kterou jsou vozidla v mapě: záběr zvětšený na každou stranu o celou jeho šířku / výšku. */
@@ -372,10 +379,14 @@ export class VehicleLayer {
     const m = this.map;
     const features = [], pushed = [];
     let missing = false;
+    // pár nových štítků (nová linka, změna zpoždění) se nakreslí rovnou, ať po aktualizaci poloh stačí jedno
+    // setData (každé = nové rozvržení štítků); hodně chybějících (první příjezd jinam) se chystá po dávkách
+    const t0 = performance.now();
     for (const uid of [...this.items.keys()].sort()) {
       const it = this.items.get(uid), v = it.v;
       if (v.lat < box.s || v.lat > box.n || v.lng < box.w || v.lng > box.e) continue;
       pushed.push(it);
+      if (this._ready && !m.hasImage(it.key) && performance.now() - t0 < 8) { this.queue.delete(it.key); try { this._addImage(it.key); } catch { /* ignore */ } }
       // zastaralá poloha: poloprůhledně (jako v appce), u tečky v barvě, u štítku v obrázku
       const props = { u: uid, k: it.cat, l: it.late, c: it.stale ? withAlpha(it.color, 0.65) : it.color };
       if (this._ready && m.hasImage(it.key)) props.i = it.key; else missing = true;
@@ -425,13 +436,22 @@ export class VehicleLayer {
 
   // ───── obrázky štítků ─────
 
-  /** Nakreslí štítek a předá ho MapLibre (ten si drží vlastní kopii). */
+  /**
+   * Nakreslí štítek a předá ho MapLibre (ten si drží vlastní kopii). Všechny štítky se kreslí do jednoho sdíleného
+   * plátna v paměti procesoru (willReadFrequently): nové plátno pro každý štítek a čtení pixelů zpět z GPU stály
+   * ~2 ms na štítek, s ~1 300 různými štítky v ČR to byly sekundy práce při prvním příjezdu do Prahy.
+   */
   _addImage(key) {
     const m = this.map;
     if (m.hasImage(key)) return;
+    if (!this._scratch) {
+      this._scratch = document.createElement('canvas');
+      this._scratch.getContext('2d', { willReadFrequently: true });
+    }
     const [line, style, late, stale] = key.slice(IMG_PREFIX.length).split('|');
-    const lb = drawLabel(line, style, 0, late === '1', this._dpr, stale === '1' ? 0.65 : 1);
-    m.addImage(key, lb.img.getContext('2d').getImageData(0, 0, lb.img.width, lb.img.height), { pixelRatio: this._dpr });
+    const lb = drawLabel(line, style, 0, late === '1', this._dpr, stale === '1' ? 0.65 : 1, this._scratch);
+    const c = lb.img;
+    m.addImage(key, c.getContext('2d').getImageData(0, 0, c.width, c.height), { pixelRatio: this._dpr });
   }
 
   /** MapLibre chce obrázek, který ještě nemá (předchystání nestihlo): nakreslí se hned. */
@@ -449,9 +469,9 @@ export class VehicleLayer {
       try { this._addImage(k); } catch { /* ignore */ }
       if (performance.now() - t0 > budgetMs) break;
     }
-    // hotové obrázky do zdroje: po dávce nejvýš 3× za vteřinu, nebo hned když je fronta prázdná
-    const now = performance.now();
-    if (this._missing && (!this.queue.size || now - (this._repushAt || 0) > 330)) { this._repushAt = now; this._push(); }
+    // hotové obrázky do zdroje JEDNÍM přepočtem, až má hotové štítky celý záběr (každé setData = nové rozvržení
+    // všech štítků; po dávkách 3× za vteřinu to v Praze zasekávalo mapu na několik sekund)
+    if (this._missing && this._pushed.every((it) => this.map.hasImage(it.key))) this._push();
   }
 
   // ───── kreslení ─────
@@ -468,8 +488,9 @@ export class VehicleLayer {
 
   _loop(now) {
     requestAnimationFrame(this._loop);
+    // štítky dopředu po malých dávkách (při pohybu mapy menší, ať nebere čas snímkům mapy)
+    if (this.queue.size) this._drain(this.map.isMoving() ? 2 : 6);
     if (!this.visible || this.map.isMoving()) return;   // při pohybu kamery kreslí 'render' (ve stejném snímku jako mapa)
-    if (this.queue.size) this._drain(4);                 // štítky dopředu: jen v klidu, po malých dávkách
     if (!this._dirty) return;
     this._draw(now, false);
   }
@@ -501,7 +522,6 @@ export class VehicleLayer {
     // přechod na štítky počká (nejvýš chvíli, viz Fade), než mají vozidla v záběru hotové obrázky štítků
     let pending = false;
     if (!this.fade.dotMode) for (const it of this._vis || []) if (!map.hasImage(it.key)) { pending = true; this.queue.add(it.key); }
-    if (pending && !this.map.isMoving()) this._drain(6);
     this.fade.tick(now, pending);
     const appear = this.fade.appear;
     this._setOpacity(this.fade.dotAlpha * appear, this.fade.labelAlpha * appear);
