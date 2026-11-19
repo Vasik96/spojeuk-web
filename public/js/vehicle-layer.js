@@ -193,6 +193,7 @@ const ease = (t) => t * t * (3 - 2 * t);
 const DOT_SRC = 'veh-src';
 export const DOT_LAYER = 'veh-dots';
 export const LABEL_LAYER = 'veh-labels';
+const PEND_LAYER = 'veh-dots-pending';   // tečky vozidel, jejichž štítek ještě není nakreslený (v režimu štítků)
 const IMG_PREFIX = 'veh:';
 /** "#RRGGBB" → "rgba(r,g,b,a)" */
 const withAlpha = (hex, a) => `rgba(${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)},${a})`;
@@ -233,6 +234,8 @@ export class VehicleLayer {
     map.on('style.load', () => { this._ready = false; this._ensureLayers(); this._prewarm(); });
     map.on('styledata', () => this._ensureLayers());
     map.on('styleimagemissing', (e) => this._imageMissing(e.id));
+    // do mapy jdou jen vozidla v okolí záběru; po posunu / oddálení mimo ně se zdroj doplní
+    map.on('moveend', () => { if (!this._boxCovers()) { this._push(); this._prewarm(); } });
     this.fade.initDotMode(map.getZoom() < DOT_ZOOM);
     this._ensureLayers();
     this._loop = this._loop.bind(this);
@@ -258,10 +261,28 @@ export class VehicleLayer {
     this._dirty = true;
   }
 
-  /** Obrázky štítků všech vozidel do fronty (MapLibre je při přechodu na štítky už bude mít). */
+  /**
+   * Obrázky štítků vozidel v okolí záběru do fronty (chystají se v klidu po dávkách, viz _loop). Vozidlo
+   * dostane odkaz na obrázek (_push, vlastnost 'i') až když je hotový: jinak si MapLibre při prvním zobrazení
+   * řekl o stovky obrázků najednou a jejich nakreslení zaseklo mapu na několik sekund.
+   */
   _prewarm() {
     if (!this._ready) return;
-    for (const it of this.items.values()) if (!this.map.hasImage(it.key)) this.queue.add(it.key);
+    for (const it of this._pushed || []) if (!this.map.hasImage(it.key)) this.queue.add(it.key);
+  }
+
+  /** Oblast, pro kterou jsou vozidla v mapě: záběr zvětšený na každou stranu o celou jeho šířku / výšku. */
+  _viewBox() {
+    const b = this.map.getBounds();
+    const dLat = b.getNorth() - b.getSouth(), dLng = b.getEast() - b.getWest();
+    return { s: b.getSouth() - dLat, n: b.getNorth() + dLat, w: b.getWest() - dLng, e: b.getEast() + dLng };
+  }
+
+  _boxCovers() {
+    const box = this._box;
+    if (!box) return false;
+    const b = this.map.getBounds();
+    return b.getSouth() >= box.s && b.getNorth() <= box.n && b.getWest() >= box.w && b.getEast() <= box.e;
   }
 
   /** Vlastnosti vozidla pro kreslení, spočítané jednou při nové poloze (ne v každém snímku). */
@@ -317,6 +338,10 @@ export class VehicleLayer {
           },
         });
       }
+      if (!m.getLayer(PEND_LAYER)) {
+        const dots = m.getLayer(DOT_LAYER).serialize();
+        m.addLayer({ ...dots, id: PEND_LAYER, filter: ['!', ['has', 'i']] });
+      }
       if (!m.getLayer(LABEL_LAYER)) {
         m.addLayer({
           id: LABEL_LAYER, type: 'symbol', source: DOT_SRC,
@@ -338,18 +363,28 @@ export class VehicleLayer {
     } catch { /* styl se ještě načítá: zkusí se znovu při 'styledata' */ }
   }
 
+  /**
+   * Vozidla do zdroje mapy. Jen v okolí záběru (jako appka): celá ČR (~3 000 vozidel) při každé aktualizaci znamenala
+   * nové rozdělení do dlaždic a rozvržení všech štítků, to byl pravidelný „záškub“ každých 8 s.
+   */
   _push() {
-    const features = [];
+    const box = (this._box = this._viewBox());
+    const m = this.map;
+    const features = [], pushed = [];
+    let missing = false;
     for (const uid of [...this.items.keys()].sort()) {
       const it = this.items.get(uid), v = it.v;
-      features.push({
-        type: 'Feature', geometry: { type: 'Point', coordinates: [v.lng, v.lat] },
-        // zastaralá poloha: poloprůhledně (jako v appce), u tečky v barvě, u štítku v obrázku
-        properties: { u: uid, k: it.cat, l: it.late, c: it.stale ? withAlpha(it.color, 0.65) : it.color, i: it.key },
-      });
+      if (v.lat < box.s || v.lat > box.n || v.lng < box.w || v.lng > box.e) continue;
+      pushed.push(it);
+      // zastaralá poloha: poloprůhledně (jako v appce), u tečky v barvě, u štítku v obrázku
+      const props = { u: uid, k: it.cat, l: it.late, c: it.stale ? withAlpha(it.color, 0.65) : it.color };
+      if (this._ready && m.hasImage(it.key)) props.i = it.key; else missing = true;
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [v.lng, v.lat] }, properties: props });
     }
+    this._pushed = pushed;
+    this._missing = missing;
     this._geo = { type: 'FeatureCollection', features };
-    this.map.getSource(DOT_SRC)?.setData(this._geo);
+    m.getSource(DOT_SRC)?.setData(this._geo);
   }
 
   /** Filtr druhů dopravy; vybrané vozidlo se z vrstev vynechá (kreslí ho canvas větší, s kroužkem). */
@@ -363,7 +398,10 @@ export class VehicleLayer {
     const f = ['all'];
     if (cats) f.push(['in', ['get', 'k'], ['literal', cats]]);
     for (const u of hide) f.push(['!=', ['get', 'u'], u]);
-    try { for (const l of [DOT_LAYER, LABEL_LAYER]) this.map.setFilter(l, f.length > 1 ? f : null); } catch { /* vrstva ještě není */ }
+    try {
+      for (const l of [DOT_LAYER, LABEL_LAYER]) this.map.setFilter(l, f.length > 1 ? f : null);
+      this.map.setFilter(PEND_LAYER, [...f, ['!', ['has', 'i']]]);
+    } catch { /* vrstva ještě není */ }
   }
 
   /** Průhlednost teček a štítků (prolínání, objevení po otevření mapy), jen při změně. */
@@ -379,6 +417,9 @@ export class VehicleLayer {
       m.setPaintProperty(DOT_LAYER, 'circle-opacity', d);
       m.setPaintProperty(DOT_LAYER, 'circle-stroke-opacity', d);
       m.setPaintProperty(LABEL_LAYER, 'icon-opacity', l);
+      // vozidla bez hotového štítku: tečka ve stejné průhlednosti, v jaké jsou vidět štítky
+      m.setPaintProperty(PEND_LAYER, 'circle-opacity', l);
+      m.setPaintProperty(PEND_LAYER, 'circle-stroke-opacity', l);
     } catch { /* vrstva ještě není */ }
   }
 
@@ -408,6 +449,9 @@ export class VehicleLayer {
       try { this._addImage(k); } catch { /* ignore */ }
       if (performance.now() - t0 > budgetMs) break;
     }
+    // hotové obrázky do zdroje: po dávce nejvýš 3× za vteřinu, nebo hned když je fronta prázdná
+    const now = performance.now();
+    if (this._missing && (!this.queue.size || now - (this._repushAt || 0) > 330)) { this._repushAt = now; this._push(); }
   }
 
   // ───── kreslení ─────
@@ -454,7 +498,11 @@ export class VehicleLayer {
     const countOk = n <= (dotNow ? LABEL_MAX : LABEL_MAX * 1.2);
     this.fade.setDotMode(!(zoomOk && countOk));
 
-    this.fade.tick(now);
+    // přechod na štítky počká (nejvýš chvíli, viz Fade), než mají vozidla v záběru hotové obrázky štítků
+    let pending = false;
+    if (!this.fade.dotMode) for (const it of this._vis || []) if (!map.hasImage(it.key)) { pending = true; this.queue.add(it.key); }
+    if (pending && !this.map.isMoving()) this._drain(6);
+    this.fade.tick(now, pending);
     const appear = this.fade.appear;
     this._setOpacity(this.fade.dotAlpha * appear, this.fade.labelAlpha * appear);
 
@@ -494,7 +542,7 @@ export class VehicleLayer {
     const layers = [];
     const o = (this._opa || '0|0').split('|').map(Number);
     if (o[0] > 0) layers.push(DOT_LAYER);
-    if (o[1] > 0) layers.push(LABEL_LAYER);
+    if (o[1] > 0) layers.push(LABEL_LAYER, PEND_LAYER);
     if (!layers.length) return [];
     const uids = (fs) => [...new Set(fs.map((f) => f.properties.u))].map((u) => this.items.get(u)?.v).filter(Boolean);
     let hits;
