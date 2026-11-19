@@ -30,6 +30,8 @@ Jízdní řády a trasy se stáhnou během sestavení Docker image. Pokud image 
 
 Bez Dockeru lze server spustit na Node.js 22.5+: `npm run data && npm start`.
 
+**Paměť:** stačí 1GB VPS. Sestavení dat si vezme kolem 200 MB, protože jízdní řád oblasti se vybírá z hotové celostátní databáze `timetable.sqlite` čtené po řádcích a velké soubory se stahují rovnou na disk. Běžící server s načteným celostátním jízdním řádem (pro trasy vozidel mimo oblast) zabere kolem 210 MB. Data pro server leží v `data/` (~175 MB na disku).
+
 ## Ochrana proti DoS/DDoS
 
 Dvě vrstvy omezení počtu požadavků na IP klienta:
