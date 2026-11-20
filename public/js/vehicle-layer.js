@@ -22,7 +22,7 @@ export const STYLES = {
   BUS: { color: '#2E7D32', route: '#1B5E20', routeDark: '#66BB6A' },
   BUS_LATE: { color: '#C62828', route: '#1B5E20', routeDark: '#66BB6A' },   // trasa zpožděného autobusu je autobusová
   TRAIN: { color: '#0277BD', route: '#01579B', routeDark: '#4FC3F7' },
-  TRAM: { color: '#00897B', route: '#00695C', routeDark: '#4DB6AC' },       // tyrkysová: fialová moc poutala pozornost
+  TRAM: { color: '#EF6C00', route: '#C25400', routeDark: '#FFB74D' },       // oranžová (dřív fialová)
   METRO_A: { color: '#00A562', route: '#007A48', routeDark: '#4CD08F' },
   METRO_B: { color: '#F8B322', darkText: true, route: '#C68A00', routeDark: '#FFD36B' },
   METRO_C: { color: '#D6006F', route: '#A10054', routeDark: '#F0609F' },     // malinová: červená C splývala se zpožděnými autobusy
