@@ -64,3 +64,20 @@ test('zastávky trasy leží na nástupišti svého směru', () => {
   const at = pts.find((p) => p && p.id === dep.from);
   assert.ok(at && Math.abs(at.lat - st[0].lat) < 1e-9 && Math.abs(at.lng - st[0].lng) < 1e-9, 'bod trasy není na nástupišti odjezdu');
 });
+
+// celostátní jízdní řád na serveru (Praha, Plzeň…): jen když jsou stažená data (npm run data)
+const dbFile = path.join(root, 'data/timetable.sqlite');
+test('server: zastávky a odjezdy mimo kraj z celostátního jízdního řádu', { skip: !fs.existsSync(dbFile) }, async () => {
+  const { StopService } = await import('../lib/stop-service.mjs');
+  const s = await StopService.open(dbFile);
+  try {
+    const andel = s.inView({ south: 50.069, north: 50.073, west: 14.400, east: 14.408 });
+    assert.ok(andel.length >= 2, `Anděl: ${andel.length} zastávek`);
+    let deps = 0;
+    for (const [key] of andel) deps += s.departures(key, { day: DAY, sec: 8 * 3600 }).deps.length;
+    assert.ok(deps > 20, `Anděl: ${deps} odjezdů`);
+    const one = s.departures(andel[0][0], { day: DAY, sec: 8 * 3600 }).deps[0];
+    const pts = s.platformPoints(one.tid);
+    assert.ok(pts && pts.some(Boolean), 'spoj bez poloh zastávek');
+  } finally { s.close(); }
+});

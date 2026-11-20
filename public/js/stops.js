@@ -185,6 +185,7 @@ function tripsAround(tt, day) {
   const today = tt.activeSvcs(day), yest = tt.activeSvcs(addDays(day, -1)), tom = tt.activeSvcs(addDays(day, 1));
   for (let tid = 1; tid < tt.trips.length; tid++) {
     const t = tt.trips[tid];
+    if (!t) continue;
     if (today.has(t.svc)) out.push([t, 0]);
     if (yest.has(t.svc) && t.dep[t.dep.length - 1] >= 86400) out.push([t, -86400]);
     if (tom.has(t.svc)) out.push([t, 86400]);
@@ -220,6 +221,7 @@ export class StopIndex {
     const nameOf = (id) => tt.stops[id]?.name || '';
     for (let tid = 1; tid < tt.trips.length; tid++) {
       const t = tt.trips[tid];
+      if (!t) continue;   // (celostátní data na serveru: id spojů nejsou souvislá)
       const st = t.stops;
       for (let pos = 0; pos < st.length - 1; pos++) {
         const s = st[pos];
@@ -333,11 +335,12 @@ export class StopIndex {
    * Odjezdy ze zastávky na mapě: { tid, day, dep (s od půlnoci dne day, může přesáhnout 24 h), line, head, isTrain }.
    * @param {{day:string, sec:number}} now
    */
-  departures(stop, now, hours = STOP_DEPARTURE_HOURS) {
+  departures(stop, now, hours = STOP_DEPARTURE_HOURS, candidates = null) {
     const tt = this.tt, t0 = now.sec, t1 = t0 + hours * 3600;
     const ids = new Set(stop.ttStops);
     const out = [];
-    for (const [t, shift] of tripsAround(tt, now.day)) {
+    // candidates: [spoj (s časy dep), posun v s] jen spojů přes zastávku (server s celostátními daty), jinak všechny
+    for (const [t, shift] of candidates || tripsAround(tt, now.day)) {
       const st = t.stops;
       for (let pos = 0; pos < st.length - 1; pos++) {
         if (!ids.has(st[pos])) continue;

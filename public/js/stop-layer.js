@@ -2,6 +2,14 @@
 // nástupiště nesmí zakrýt zastávku), od zoomu STOP_MIN_ZOOM; při přechodu přes hranici zoomu se plynule objeví / zmizí.
 // Vybrané vozidlo kreslí vehicle-layer.js do vlastního canvasu nad mapou, takže zůstává nad zastávkami.
 import { GL_LAYER } from './vehicle-layer.js';
+import { CONFIG } from './config.js';
+
+/**
+ * Oblast jízdního řádu v prohlížeči (Ústecký kraj, jako REGION v live.js): uvnitř zastávky z místních dat,
+ * venku (Praha, Plzeň…) ze serveru (/api/stops, celostátní jízdní řád, stejný výpočet nástupišť).
+ */
+const LOCAL = { s: 50.40, n: 50.90, w: 13.70, e: 14.45 };
+const inLocal = (lat, lng) => lat >= LOCAL.s && lat <= LOCAL.n && lng >= LOCAL.w && lng <= LOCAL.e;
 
 const SRC = 'stops-src';
 const LAYER = 'stops';
@@ -55,6 +63,9 @@ export class StopLayer {
     this.index = index;
     this.shown = null;          // jsou zastávky vidět (podle zoomu)
     this.list = [];             // zastávky ve zdroji (pro ťuknutí)
+    this.remote = [];           // zastávky ze serveru (mimo kraj) pro poslední výřez
+    this._remoteKey = '';       // výřez posledního dotazu (zaokrouhlený)
+    this._remoteSeq = 0;
     this._dpr = Math.min(3, window.devicePixelRatio || 1);
     this._add();
     map.on('style.load', () => { this.shown = null; this._add(); });
@@ -112,11 +123,14 @@ export class StopLayer {
 
   /** Zastávky v záběru do zdroje; skryté (malý zoom) zůstanou, ať je co prolínat. */
   _update(force = false) {
-    if (!this.shown && !force) return;
     if (!this.shown) return;
     const b = this.map.getBounds();
     const dy = (b.getNorth() - b.getSouth()) * 0.1, dx = (b.getEast() - b.getWest()) * 0.1;
-    const list = this.index.inView({ south: b.getSouth() - dy, north: b.getNorth() + dy, west: b.getWest() - dx, east: b.getEast() + dx });
+    const box = { south: b.getSouth() - dy, north: b.getNorth() + dy, west: b.getWest() - dx, east: b.getEast() + dx };
+    const local = this.index ? this.index.inView(box).filter((s) => inLocal(s.lat, s.lng)) : [];
+    const whollyLocal = inLocal(box.south, box.west) && inLocal(box.north, box.east);
+    if (!whollyLocal) this._fetchRemote(box);
+    const list = local.concat(whollyLocal ? [] : this.remote.filter((s) => !inLocal(s.lat, s.lng)));
     if (!force && list.length === this.list.length && list.every((s, i) => s === this.list[i])) return;
     this.list = list;
     const src = this.map.getSource(SRC);
@@ -125,6 +139,25 @@ export class StopLayer {
       type: 'FeatureCollection',
       features: list.map((s) => ({ type: 'Feature', properties: { img: s.kind === 'rail' ? IMG_RAIL : IMG_BUS }, geometry: { type: 'Point', coordinates: [s.lng, s.lat] } })),
     });
+  }
+
+  /** Zastávky mimo kraj ze serveru pro výřez (odpověď server cachuje, výřez se zaokrouhlí, ať se opakovaně trefí). */
+  async _fetchRemote(box) {
+    const r = (x) => Math.round(x * 200) / 200;   // ~0,005° (≈ 500 m)
+    const q = { s: r(box.south) - 0.005, w: r(box.west) - 0.005, n: r(box.north) + 0.005, e: r(box.east) + 0.005 };
+    const key = `${q.s},${q.w},${q.n},${q.e}`;
+    if (key === this._remoteKey) return;
+    this._remoteKey = key;
+    const seq = ++this._remoteSeq;
+    try {
+      const res = await fetch(`${CONFIG.API_BASE}/api/stops?s=${q.s}&w=${q.w}&n=${q.n}&e=${q.e}`);
+      if (!res.ok || seq !== this._remoteSeq) return;
+      const { stops } = await res.json();
+      const prev = new Map(this.remote.map((s) => [s.key, s]));
+      // stejné objekty pro stejné klíče: seznam ve zdroji se nemění zbytečně
+      this.remote = stops.map(([key, lat, lng, kind]) => prev.get(key) || { key, lat, lng, kind, remote: true });
+      this._update(true);
+    } catch { if (seq === this._remoteSeq) this._remoteKey = ''; }
   }
 
   /** Zastávka pod bodem (CSS px v mapě), nebo null. */

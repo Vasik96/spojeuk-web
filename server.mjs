@@ -17,7 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { Hub, SERVER_BASE } from './lib/hub.mjs';
 import { mockSnapshot } from './lib/mock.mjs';
 import { createLimits, routeClass, clientIp, ipKey } from './lib/ratelimit.mjs';
-import { TripLookup } from './lib/trip-lookup.mjs';
+import { TripLookup, LOOKUP_FILES } from './lib/trip-lookup.mjs';
+import { StopService } from './lib/stop-service.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(root, 'public');
@@ -81,7 +82,57 @@ function getLookup() {
     .finally(() => { lookupLoading = null; });
   return lookupLoading;
 }
-function reloadLookup() { const old = lookup; lookup = null; tripCache.clear(); old?.close(); getLookup(); }
+function reloadLookup() {
+  const old = lookup; lookup = null; tripCache.clear(); old?.close(); getLookup();
+  const oldStops = stopSvc; stopSvc = null; oldStops?.close();   // zastávky se načtou znovu při dalším dotazu
+}
+
+// ───────────── zastávky a odjezdy mimo kraj (celostátní jízdní řád) ─────────────
+// Prohlížeč má zastávky jen pro Ústecký kraj; jinde (Praha, Plzeň…) je počítá server stejným kódem (lib/stop-service.mjs).
+// Načte se až při prvním dotazu (několik sekund, ~150 MB), aby server bez mapy mimo kraj nezabíral paměť.
+let stopSvc = null, stopLoading = null, stopFailedAt = 0;
+function getStops() {
+  if (stopSvc) return Promise.resolve(stopSvc);
+  if (stopLoading) return stopLoading;
+  if (Date.now() - stopFailedAt < 60_000) return Promise.resolve(null);
+  stopLoading = StopService.open(path.join(LOOKUP_DIR, LOOKUP_FILES.db))
+    .then((s) => { stopSvc = s; return s; })
+    .catch((e) => { console.warn('[stops]', e.message); stopFailedAt = Date.now(); return null; })
+    .finally(() => { stopLoading = null; });
+  return stopLoading;
+}
+
+const JSON_HDR = { 'content-type': 'application/json; charset=utf-8' };
+async function stopsJson(q) {
+  const n = (k) => { const x = Number(q.get(k)); return Number.isFinite(x) ? x : null; };
+  const b = { south: n('s'), west: n('w'), north: n('n'), east: n('e') };
+  if (Object.values(b).some((x) => x == null) || b.north < b.south || b.east < b.west) return { status: 400, body: '{"error":"špatný výřez"}' };
+  // jen přiblížená mapa (výřez do ~0,2°), jinak by se posílaly tisíce zastávek
+  if (b.north - b.south > 0.2 || b.east - b.west > 0.3) return { status: 200, body: '{"stops":[]}' };
+  const s = await getStops();
+  if (!s) return { status: 503, body: '{"error":"celostátní jízdní řád není k dispozici"}' };
+  return { status: 200, body: JSON.stringify({ stops: s.inView(b) }) };
+}
+async function stopDeparturesJson(q) {
+  const key = String(q.get('key') || '').slice(0, 40);
+  const s = await getStops();
+  if (!s) return { status: 503, body: '{"error":"celostátní jízdní řád není k dispozici"}' };
+  const r = s.departures(key, pragueNowServer());
+  return r ? { status: 200, body: JSON.stringify(r) } : { status: 404, body: '{"error":"neznámá zastávka"}' };
+}
+async function tripJson(q) {
+  const tid = Number(q.get('tid'));
+  if (!Number.isInteger(tid) || tid <= 0) return { status: 400, body: '{"error":"špatné číslo spoje"}' };
+  const [l, s] = await Promise.all([getLookup(), getStops()]);
+  const trip = l?.describe(tid);
+  if (!trip) return { status: 404, body: '{"trip":null}' };
+  return { status: 200, body: JSON.stringify({ trip: { ...trip, platforms: s?.platformPoints(tid) ?? null } }) };
+}
+function pragueNowServer() {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Prague', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return { day: `${p.year}${p.month}${p.day}`, sec: +p.hour * 3600 + +p.minute * 60 + +p.second };
+}
 
 const tripCache = new Map(); // dotaz (zaokrouhlený) → { at, body }
 /** Plzeň (PMDP): zastávky a tvar trasy přímo od dopravce přes feed server (v celostátním řádu jsou pod jinými čísly). */
@@ -226,6 +277,12 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/vehicle-trip') {
       const r = await vehicleTripJson(url.searchParams);
       return send(req, res, r.status, r.body, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    }
+    if (url.pathname === '/api/stops' || url.pathname === '/api/stop-departures' || url.pathname === '/api/trip') {
+      const r = await (url.pathname === '/api/stops' ? stopsJson : url.pathname === '/api/trip' ? tripJson : stopDeparturesJson)(url.searchParams);
+      // zastávky se mění jen s jízdním řádem, odjezdy s časem (minuta)
+      const cache = url.pathname === '/api/stops' || url.pathname === '/api/trip' ? 'public, max-age=600' : 'public, max-age=30';
+      return send(req, res, r.status, r.body, { ...JSON_HDR, 'cache-control': r.status === 200 ? cache : 'no-store' });
     }
     if (url.pathname === '/api/map-config') {
       return send(req, res, 200, JSON.stringify(mapConfig()), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300' });

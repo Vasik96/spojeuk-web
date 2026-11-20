@@ -12,7 +12,7 @@ import { StopIndex, STOP_DEPARTURE_HOURS } from './stops.js';
 import { StopLayer } from './stop-layer.js';
 import {
   prettyName, splitStopName, stopLabel, hhmm, pragueNow, addDays, dayDiff, dayToIso, isoToDay, fmtMinutes, fmtDist,
-  pluralStops, pluralTransfers, ageLabel, fmtDayShort, DAY_NAMES, weekday, NBSP, dedupeByUid,
+  pluralStops, pluralTransfers, ageLabel, fmtDayShort, DAY_NAMES, weekday, NBSP, dedupeByUid, distanceM,
 } from './util.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -744,7 +744,12 @@ function focusLive(d) {
   const liveUid = live && S.vehicles.some((x) => vehicleUid(x) === vehicleUid(live)) ? vehicleUid(live) : null;
   // dřív tlačítko „nic neudělalo“: když vůz spoje teď nevidíme, aspoň to řekneme
   if (!liveUid) setTimeout(() => toast('Vůz tohoto spoje teď na mapě nevidíme, ukazuji jen trasu.'), 250);
-  if (liveUid) {
+  if (liveUid) focusUid(liveUid);
+}
+
+/** Zvýrazní vůz a přiblíží na něj (mobil: bliknutí, počítač: detail). */
+function focusUid(liveUid) {
+  {
     setTimeout(() => {
       const mobile = matchMedia('(max-width: 640px)').matches;
       S.selected = mobile ? null : liveUid;
@@ -975,21 +980,36 @@ function openStop(st) {
 function renderStopSheet() {
   const st = S.stopSel;
   if (!st) return;
+  if (!st.remote) return drawStopSheet(st.name, S.stopIdx.departures(st, pragueNow()));
+  // zastávka mimo kraj: odjezdy z celostátního jízdního řádu na serveru
+  if (!S.stopDeps || S.stopDepsKey !== st.key) drawStopSheet(st.name || 'Zastávka', null);
+  fetch(`${CONFIG.API_BASE}/api/stop-departures?key=${encodeURIComponent(st.key)}`)
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
+    .then((j) => { if (S.stopSel === st) { st.name = j.name; drawStopSheet(j.name, j.deps); } })
+    .catch(() => { if (S.stopSel === st && !S.stopDeps) $('#stop-deps-msg').textContent = 'Odjezdy se nepodařilo načíst.'; });
+}
+
+/** Panel odjezdů (deps = null: načítá se). */
+function drawStopSheet(name, deps) {
   const now = pragueNow();
-  const deps = S.stopIdx.departures(st, now);
   S.stopDeps = deps;
-  const rows = deps.map((d, i) => {
-    const t = S.tt.trips[d.tid];
+  S.stopDepsKey = S.stopSel?.key;
+  const rows = (deps || []).map((d, i) => {
+    const t = S.tt?.trips[d.tid];
     const min = Math.round((d.dep - now.sec) / 60);
     const when = min <= 0 ? 'teď' : `za ${min}${NBSP}min`;
     const head = d.isTrain ? d.head : stopLabel(d.head);
-    return `<li><button type="button" class="dep-row" data-i="${i}">${depBadgeHtml(t)}<span class="dep-head">směr ${esc(head)}</span><span class="dep-time"><strong>${hhmm(d.dep % 86400)}</strong><small>${when}</small></span></button></li>`;
+    const style = d.agency != null ? { isTrain: d.isTrain, agency: d.agency, line: d.line } : t;
+    return `<li><button type="button" class="dep-row" data-i="${i}">${depBadgeHtml(style)}<span class="dep-head">směr ${esc(head)}</span><span class="dep-time"><strong>${hhmm(d.dep % 86400)}</strong><small>${when}</small></span></button></li>`;
   }).join('');
+  const body = deps == null ? '<p class="age" id="stop-deps-msg">Načítám odjezdy…</p>'
+    : deps.length ? `<ol class="stop-deps">${rows}</ol>`
+      : `<p class="age">V příštích ${STOP_DEPARTURE_HOURS}${NBSP}hodinách odsud nic nejede.</p>`;
   $('#sheet-body').innerHTML = `
     <h3>Odjezdy</h3>
-    <p class="stop-name">${esc(st.name)}</p>
+    <p class="stop-name">${esc(name)}</p>
     <p class="age">Podle jízdního řádu, nejbližší ${STOP_DEPARTURE_HOURS}${NBSP}hodiny</p>
-    ${deps.length ? `<ol class="stop-deps">${rows}</ol>` : `<p class="age">V příštích ${STOP_DEPARTURE_HOURS}${NBSP}hodinách odsud nic nejede.</p>`}`;
+    ${body}`;
   showEl($('#sheet'));
 }
 
@@ -1005,7 +1025,8 @@ $('#sheet-body').addEventListener('click', (e) => {
   const size = Math.max(r.width, r.height) * 2;
   wave.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX - r.left - size / 2}px;top:${e.clientY - r.top - size / 2}px`;
   btn.append(wave);
-  setTimeout(() => { closeSheet(); showDeparture(d); }, 170);
+  const remote = !!S.stopSel.remote;
+  setTimeout(() => { closeSheet(); (remote ? showRemoteDeparture : showDeparture)(d); }, 170);
 });
 
 function showDeparture(dep) {
@@ -1031,6 +1052,50 @@ function showDeparture(dep) {
   // celá trasa do záběru, pak případně přiblížení na vůz
   S.map.fitBounds(line, { padding: { bottom: 60 } });
   focusLive({ rides: [{ tid: dep.tid, from: dep.from, to: ids.at(-1), dep: dep.dep }], day: dep.day });
+}
+
+/** Odjezd ze zastávky mimo kraj: spoj ze serveru (zastávky na nástupištích, tvar trasy) a jeho vůz na mapě. */
+async function showRemoteDeparture(dep) {
+  clearOverlay();
+  const gen = overlayGen;
+  let trip = null;
+  try {
+    const r = await fetch(`${CONFIG.API_BASE}/api/trip?tid=${dep.tid}`);
+    if (r.ok) trip = (await r.json()).trip;
+  } catch { /* offline */ }
+  if (gen !== overlayGen) return;
+  if (!trip) { toast('Trasu spoje se nepodařilo načíst.'); return; }
+  const pts = trip.stops.map((s, i) => trip.platforms?.[i] || (s[1] || s[2] ? [s[1], s[2]] : null));
+  const line = pts.filter(Boolean);
+  const pl = S.map.addPolyline(trip.route && trip.route.length >= 2 ? trip.route : line, { color: trip.isTrain ? '#6a5bd8' : '#2786d6', width: 10, arrows: true });
+  S.overlay.lines.push(pl);
+  if (!trip.route && !trip.isTrain) osrmRoute(line).then((r) => { if (r && gen === overlayGen) pl.setPoints(r); });
+  const real = pts.map((p, i) => [p, i]).filter(([p]) => p);
+  const boardI = real.findIndex(([, i]) => trip.stops[i] && trip.stops[i][4] % 86400 === dep.dep % 86400);
+  real.forEach(([p, i], k) => {
+    const name = stopLabel(prettyName(trip.stops[i][0]));
+    if (k === 0 || k === real.length - 1) pin(p[0], p[1], k === real.length - 1, name);
+    else dot(p[0], p[1], `stopdot${k === boardI ? '' : ' mid'}`, k === boardI ? name : null);
+  });
+  showRouteControls();
+  setTab('map');
+  S.map.fitBounds(line, { padding: { bottom: 60 } });
+  // vůz spoje: vlak podle čísla, jinak stejná linka nejblíž trase před nástupní zastávkou
+  const board = boardI >= 0 ? real[boardI][0] : line[0];
+  const routePts = trip.route && trip.route.length >= 2 ? trip.route : line;
+  const offRoute = (v) => {
+    let best = Infinity;
+    for (let i = 0; i < routePts.length; i += Math.max(1, Math.floor(routePts.length / 400))) best = Math.min(best, distanceM(v.lat, v.lng, routePts[i][0], routePts[i][1]));
+    return best;
+  };
+  const norm = (x) => String(x ?? '').trim().replace(/^0+(?=\d)/, '').toLowerCase();
+  const cands = S.vehicles.filter((v) => v.state !== 255 && (trip.isTrain
+    ? v.train && norm(v.cis) === norm(trip.num)
+    : !v.train && norm(v.line) === norm(trip.line) && offRoute(v) < 250));
+  cands.sort((a, b) => distanceM(a.lat, a.lng, board[0], board[1]) - distanceM(b.lat, b.lng, board[0], board[1]));
+  const live = cands[0];
+  if (!live) setTimeout(() => toast('Vůz tohoto spoje teď na mapě nevidíme, ukazuji jen trasu.'), 250);
+  else focusUid(vehicleUid(live));
 }
 
 function drawVehicleRoute(d) {
