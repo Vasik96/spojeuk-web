@@ -267,8 +267,8 @@ body { overscroll-behavior: none; }
 @media (max-width: 959px) { .sheet { animation: sheet-up .32s cubic-bezier(.2, .8, .2, 1); } }
 .mini-dlg[open] { animation: rise .26s cubic-bezier(.2, .8, .2, 1) both; }
 .mini-dlg[open]::backdrop, .welcome[open]::backdrop { animation: fade-in .22s ease; }
-dialog.closing { animation: dlg-out .18s cubic-bezier(.4, 0, 1, 1) forwards; }
-dialog.closing::backdrop { animation: fade-out .18s ease forwards; }
+dialog.closing[open] { animation: dlg-out .18s cubic-bezier(.4, 0, 1, 1) forwards; }
+dialog.closing[open]::backdrop { animation: fade-out .18s ease forwards; }
 .tl-wrap { overflow: hidden; }
 
 /* odezva tlačítek na stisk */
