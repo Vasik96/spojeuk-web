@@ -16,17 +16,19 @@ const LABEL_MAX = 1500;               // víc štítků v záběru = nečitelné
 const STALE_S = 60;                   // starší poloha: poloprůhledně (jako v appce)
 
 /** Barvy a druhy vozidel (VehicleStyle v appce). */
+// color = vůz (štítek, tečka, odjezd); trasa spoje na mapě je odstín téže barvy: ve světlém motivu tmavší
+// (route), v tmavém světlejší (routeDark), ať je čára vidět a neruší (jako v appce)
 export const STYLES = {
-  BUS: { color: '#2E7D32' },
-  BUS_LATE: { color: '#C62828' },
-  TRAIN: { color: '#0277BD' },
-  TRAM: { color: '#7B1FA2' },
-  METRO_A: { color: '#00A562' },
-  METRO_B: { color: '#F8B322', darkText: true },
-  METRO_C: { color: '#D6006F' },     // malinová: oficiální červená C splývala se zpožděnými autobusy
-  METRO: { color: '#37474F' },
-  FERRY: { color: '#1565C0' },
-  FUNICULAR: { color: '#6D4C41' },
+  BUS: { color: '#2E7D32', route: '#1B5E20', routeDark: '#66BB6A' },
+  BUS_LATE: { color: '#C62828', route: '#1B5E20', routeDark: '#66BB6A' },   // trasa zpožděného autobusu je autobusová
+  TRAIN: { color: '#0277BD', route: '#01579B', routeDark: '#4FC3F7' },
+  TRAM: { color: '#00897B', route: '#00695C', routeDark: '#4DB6AC' },       // tyrkysová: fialová moc poutala pozornost
+  METRO_A: { color: '#00A562', route: '#007A48', routeDark: '#4CD08F' },
+  METRO_B: { color: '#F8B322', darkText: true, route: '#C68A00', routeDark: '#FFD36B' },
+  METRO_C: { color: '#D6006F', route: '#A10054', routeDark: '#F0609F' },     // malinová: červená C splývala se zpožděnými autobusy
+  METRO: { color: '#37474F', route: '#263238', routeDark: '#90A4AE' },
+  FERRY: { color: '#1565C0', route: '#0D47A1', routeDark: '#64B5F6' },
+  FUNICULAR: { color: '#6D4C41', route: '#4E342E', routeDark: '#A1887F' },
 };
 export const LATE_COLOR = '#D32F2F';
 const HL_COLORS = ['#FFD54F', '#FF6D00'];   // krátké upozornění na vůz (po „Mapa“ u spojení na mobilu)

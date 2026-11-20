@@ -527,6 +527,10 @@ function tripStyle(t) {
   return { st: STYLES.BUS, ic: 'bus' };
 }
 
+/** Odstín barvy vozu pro trasu: ve světlém motivu tmavší, v tmavém světlejší (autobus zelená, vlak modrá…). */
+const routeOf = (st) => (resolvedTheme() === 'dark' ? st.routeDark : st.route);
+const routeColor = (t) => routeOf(tripStyle(t).st);
+
 function depBadgeHtml(t) {
   const { st, ic } = tripStyle(t);
   return `<span class="badge" style="background:${st.color};color:${st.darkText ? '#000' : '#fff'}">${icon(ic)}${esc(t.line)}</span>`;
@@ -708,7 +712,7 @@ function showJourneyOnMap(d) {
     // zastávky na nástupištích (strana silnice podle směru jízdy), stejně jako ikony zastávek na mapě
     const lp = legPoints(l);
     const line = lp.filter(Boolean).map((p) => [p.lat, p.lng]);
-    const pl = S.map.addPolyline(line, { color: t.isTrain ? '#6a5bd8' : '#2786d6', width: 10, arrows: true });
+    const pl = S.map.addPolyline(line, { color: routeColor(t), width: 10, arrows: true });
     S.overlay.lines.push(pl);
     // přesná trasa po silnici/trati nahradí rovnou čáru, jakmile se načte
     const gen = overlayGen;
@@ -1035,7 +1039,7 @@ function showDeparture(dep) {
   const ids = Array.from(t.stops);
   const pts = S.stopIdx.platformPoints(ids);
   const line = pts.filter(Boolean).map((p) => [p.lat, p.lng]);
-  const pl = S.map.addPolyline(line, { color: t.isTrain ? '#6a5bd8' : '#2786d6', width: 10, arrows: true });
+  const pl = S.map.addPolyline(line, { color: routeColor(t), width: 10, arrows: true });
   S.overlay.lines.push(pl);
   const gen = overlayGen;
   legRoute(S.shapes, tt, dep.tid, ids)
@@ -1067,7 +1071,7 @@ async function showRemoteDeparture(dep) {
   if (!trip) { toast('Trasu spoje se nepodařilo načíst.'); return; }
   const pts = trip.stops.map((s, i) => trip.platforms?.[i] || (s[1] || s[2] ? [s[1], s[2]] : null));
   const line = pts.filter(Boolean);
-  const pl = S.map.addPolyline(trip.route && trip.route.length >= 2 ? trip.route : line, { color: trip.isTrain ? '#6a5bd8' : '#2786d6', width: 10, arrows: true });
+  const pl = S.map.addPolyline(trip.route && trip.route.length >= 2 ? trip.route : line, { color: routeColor(trip), width: 10, arrows: true });
   S.overlay.lines.push(pl);
   if (!trip.route && !trip.isTrain) osrmRoute(line).then((r) => { if (r && gen === overlayGen) pl.setPoints(r); });
   const real = pts.map((p, i) => [p, i]).filter(([p]) => p);
@@ -1100,7 +1104,10 @@ async function showRemoteDeparture(dep) {
 
 function drawVehicleRoute(d) {
   clearOverlay();
-  const pl = S.map.addPolyline(d.shape || d.route, { color: d.trip.isTrain ? '#6a5bd8' : '#2786d6', width: 10, arrows: true });
+  // barva podle vybraného vozu (tramvaj, metro, vlak, autobus), jinak podle spoje
+  const sel = S.vehicles.find((x) => vehicleUid(x) === S.selected);
+  const vs = sel ? STYLES[vehicleStyle(sel)] : null;
+  const pl = S.map.addPolyline(d.shape || d.route, { color: vs ? routeOf(vs) : routeColor(d.trip), width: 10, arrows: true });
   S.overlay.lines.push(pl);
   const gen = overlayGen;
   // tvar ze serveru už je nakreslený; jinak z shapes.bin, u autobusu bez tvaru po silnici přes OSRM
