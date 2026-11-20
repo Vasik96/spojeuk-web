@@ -165,16 +165,20 @@ function drawSelected(line, styleKey, late, dpr) {
  * stovky nových štítků) se animace jen zpomalí, ale je vidět. Přechod na štítky počká, než jsou nakreslené.
  */
 class Fade {
-  static APPEAR = 700; static SWITCH = 380; static MAX_STEP = 34; static HOLD_MAX = 600;
-  constructor() { this.appearT = -1; this.switchT = 1; this.hold = 0; this.last = 0; this.dotMode = true; }
+  static APPEAR = 700; static SWITCH = 380; static MAX_STEP = 34; static HOLD_MAX = 600; static APPEAR_HOLD_MAX = 1500;
+  constructor() { this.appearT = -1; this.switchT = 1; this.hold = 0; this.ahold = 0; this.last = 0; this.dotMode = true; }
   startAppear() { if (this.appearT < 0) this.appearT = 0; }
-  resetAppear() { this.appearT = -1; }
+  resetAppear() { this.appearT = -1; this.ahold = 0; }
   setDotMode(dot) { if (dot === this.dotMode) return; this.dotMode = dot; this.switchT = 1 - this.switchT; this.hold = 0; }
   initDotMode(dot) { this.dotMode = dot; this.switchT = 1; }
   tick(now, labelsPending = false) {
     const dt = this.last ? Math.min(Fade.MAX_STEP, Math.max(0, now - this.last)) : 16;
     this.last = now;
-    if (this.appearT >= 0 && this.appearT < 1) this.appearT = Math.min(1, this.appearT + dt / Fade.APPEAR);
+    if (this.appearT >= 0 && this.appearT < 1) {
+      // první objevení ve štítcích počká na štítky v záběru (jinak by se ukázaly tečky a po kouscích přeskočily na štítky)
+      if (this.appearT === 0 && labelsPending && !this.dotMode && this.ahold < Fade.APPEAR_HOLD_MAX) this.ahold += dt;
+      else this.appearT = Math.min(1, this.appearT + dt / Fade.APPEAR);
+    }
     if (this.switchT < 1) {
       if (labelsPending && !this.dotMode && this.hold < Fade.HOLD_MAX) this.hold += dt;
       else this.switchT = Math.min(1, this.switchT + dt / Fade.SWITCH);
@@ -263,6 +267,8 @@ export class VehicleLayer {
     this._base = performance.now();
     this._dpr = Math.min(3, window.devicePixelRatio || 1);
     this._rebuild = true;
+    this._back = null;           // rozestavěný nový atlas (při zaplnění), viz _upload
+    this._visMissing = 0;        // vozidla v záběru, jejichž štítek ještě není v atlasu
 
     const cv = (this.canvas = document.createElement('canvas'));
     cv.className = 'veh-canvas';
@@ -303,8 +309,11 @@ export class VehicleLayer {
         it.tx = x; it.ty = y;
       }
       it.v = v;
+      const oldKey = it.key;
       this._meta(it);
-      if (!this.rects.has(it.key)) this.queue.add(it.key);
+      // jiná varianta štítku (zpoždění, zastaralá poloha): do nakreslení nové se ukazuje stará, ne tečka
+      if (oldKey && oldKey !== it.key && this.rects.has(oldKey)) it.prevKey = oldKey;
+      if (!this._target().rects.has(it.key)) this.queue.add(it.key);
     }
     for (const uid of this.items.keys()) if (!seen.has(uid)) this.items.delete(uid);
     if (this.items.size) this.fade.startAppear();
@@ -391,8 +400,9 @@ export class VehicleLayer {
     this.isGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
     this.vaoExt = this.isGL2 ? null : gl.getExtension('OES_vertex_array_object');
     this.vao = this.isGL2 ? gl.createVertexArray() : this.vaoExt?.createVertexArrayOES() ?? null;
-    // atlas štítků: jedna textura, řádkové skládání; při zaplnění se začne znovu
+    // atlas štítků: jedna textura, řádkové skládání; při zaplnění se postaví nový (_upload)
     this.atlasSize = Math.min(4096, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    this._back = null;
     this.tex = gl.createTexture();
     this._atlasReset();
     this._rebuild = true;
@@ -403,22 +413,59 @@ export class VehicleLayer {
   _glFree(gl) {
     try {
       gl.deleteProgram(this.prog); gl.deleteBuffer(this.bufDots); gl.deleteBuffer(this.bufLabels); gl.deleteTexture(this.tex);
+      if (this._back) gl.deleteTexture(this._back.tex);
+      this._back = null;
       if (this.vao) { if (this.isGL2) gl.deleteVertexArray(this.vao); else this.vaoExt?.deleteVertexArrayOES(this.vao); }
     } catch { /* ignore */ }
     this.gl = null;
   }
 
-  _atlasReset() {
-    const gl = this.gl;
-    const S = this.atlasSize;
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+  /** Rozlišení štítků v atlasu: nejvýš 2× (při 3× by se do atlasu vešlo jen ~1 300 štítků, rozdíl ostrosti není vidět). */
+  get _adpr() { return Math.min(2, this._dpr); }
+
+  _initTex(tex) {
+    const gl = this.gl, S = this.atlasSize;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, S, S, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+
+  /** Úplně nový atlas (start, ztráta kontextu, jiná hustota pixelů): štítky se nakreslí znovu. */
+  _atlasReset() {
+    if (this._back) { this.gl.deleteTexture(this._back.tex); this._back = null; }
+    this._initTex(this.tex);
     this.rects.clear();
     this.ax = 2; this.ay = 2; this.arow = 0;
+    this._rebuild = true;
+  }
+
+  /** Atlas, do kterého se teď kreslí: rozestavěný nový, jinak ten zobrazený. */
+  _target() { return this._back || this; }
+
+  /**
+   * Zobrazený atlas je plný: nový se staví vedle jen se štítky vozidel, která teď jsou (staré varianty zpoždění,
+   * vozy, co odjely, vypadnou). Do té doby se kreslí ze starého, přepne se naráz (dřív se atlas smazal a všechny
+   * štítky na pár sekund spadly na tečky = blikání). Nejvýš jednou za 30 s, kdyby se ani nový nevešel.
+   */
+  _startBack() {
+    const now = performance.now();
+    if (now - (this._backAt || -1e9) < 30_000) return false;
+    this._backAt = now;
+    const tex = this.gl.createTexture();
+    this._initTex(tex);
+    this._back = { tex, rects: new Map(), ax: 2, ay: 2, arow: 0 };
+    for (const it of this.items.values()) this.queue.add(it.key);
+    return true;
+  }
+
+  _swapBack() {
+    const b = this._back;
+    this.gl.deleteTexture(this.tex);
+    this.tex = b.tex; this.rects = b.rects; this.ax = b.ax; this.ay = b.ay; this.arow = b.arow;
+    this._back = null;
     this._rebuild = true;
   }
 
@@ -429,30 +476,51 @@ export class VehicleLayer {
       this._scratch.getContext('2d', { willReadFrequently: true });
     }
     const [line, style, late, stale] = key.split('|');
-    const lb = drawLabel(line, style, 0, late === '1', this._dpr, stale === '1' ? 0.65 : 1, this._scratch);
+    const lb = drawLabel(line, style, 0, late === '1', this._adpr, stale === '1' ? 0.65 : 1, this._scratch);
     const c = lb.img;
     this.uploads.push({ key, data: c.getContext('2d').getImageData(0, 0, c.width, c.height) });
   }
 
   _upload(gl) {
-    if (!this.uploads.length) return;
-    const S = this.atlasSize;
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-    for (const { key, data } of this.uploads) {
-      if (this.rects.has(key)) continue;
-      // sudé rozměry: polovina velikosti v celých pixelech (vertex shader kreslí od středu)
-      const w = data.width + (data.width & 1), h = data.height + (data.height & 1);
-      if (this.ax + w + 2 > S) { this.ax = 2; this.ay += this.arow + 2; this.arow = 0; }
-      if (this.ay + h + 2 > S) { this._atlasReset(); gl.bindTexture(gl.TEXTURE_2D, this.tex); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true); for (const it of this.items.values()) this.queue.add(it.key); break; }
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, this.ax, this.ay, gl.RGBA, gl.UNSIGNED_BYTE, data);
-      this.rects.set(key, { u0: this.ax / S, v0: this.ay / S, u1: (this.ax + w) / S, v1: (this.ay + h) / S, hw: w / 2 / this._dpr, hh: h / 2 / this._dpr });
-      this.ax += w + 2;
-      if (h > this.arow) this.arow = h;
+    if (this.uploads.length) {
+      const S = this.atlasSize, adpr = this._adpr;
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      for (const { key, data } of this.uploads) {
+        let a = this._target();
+        if (a.rects.has(key)) continue;
+        // sudé rozměry: polovina velikosti v celých pixelech (vertex shader kreslí od středu)
+        const w = data.width + (data.width & 1), h = data.height + (data.height & 1);
+        const fits = () => {
+          if (a.ax + w + 2 > S) { a.ax = 2; a.ay += a.arow + 2; a.arow = 0; }
+          return a.ay + h + 2 <= S;
+        };
+        if (!fits()) {
+          if (a === this) {
+            if (!this._startBack()) continue;   // plný a nový se teď stavět nemá: vůz zatím jako tečka
+            a = this._back;
+            fits();
+          } else {
+            this._swapBack();                   // ani nový se nevešel: aspoň to, co je hotové
+            continue;
+          }
+        }
+        gl.bindTexture(gl.TEXTURE_2D, a.tex);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, a.ax, a.ay, gl.RGBA, gl.UNSIGNED_BYTE, data);
+        a.rects.set(key, { u0: a.ax / S, v0: a.ay / S, u1: (a.ax + w) / S, v1: (a.ay + h) / S, hw: w / 2 / adpr, hh: h / 2 / adpr });
+        a.ax += w + 2;
+        if (h > a.arow) a.arow = h;
+      }
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      this.uploads = [];
+      if (!this._back) this._rebuild = true;
     }
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    this.uploads = [];
-    this._rebuild = true;
+    // nový atlas hotový (všechny štítky současných vozidel): přepnout naráz
+    if (this._back && !this.queue.size) {
+      let done = true;
+      for (const it of this.items.values()) if (!this._back.rects.has(it.key)) { done = false; break; }
+      if (done) this._swapBack();
+      else for (const it of this.items.values()) if (!this._back.rects.has(it.key)) this.queue.add(it.key);
+    }
   }
 
   /** Buffery vrcholů: tečky a štítky (štítek, který ještě není v atlasu, zastoupí tečka). Jen při změně dat. */
@@ -487,7 +555,9 @@ export class VehicleLayer {
       const col = rgba(it.color, it.stale ? 0.65 : 1);
       const dh = it.late ? 6.5 : 5.5;
       put(dots, i, it, [dh, dh], DOT_UV, col);
-      const r = this.rects.get(it.key);
+      let r = this.rects.get(it.key);
+      if (r) it.prevKey = null;
+      else if (it.prevKey) r = this.rects.get(it.prevKey);
       if (r) put(labs, i, it, [r.hw, r.hh], [r.u0, r.v0, r.u1, r.v1], col);
       else put(labs, i, it, [dh, dh], DOT_UV, col);
     });
@@ -527,7 +597,7 @@ export class VehicleLayer {
     const zoomOk = dotNow ? zoom >= DOT_ZOOM + DOT_HYST : zoom >= DOT_ZOOM;
     const countOk = (this._nVis || 0) <= (dotNow ? LABEL_MAX : LABEL_MAX * 1.2);
     this.fade.setDotMode(!(zoomOk && countOk));
-    this.fade.tick(now);
+    this.fade.tick(now, this._visMissing > 0);
     const appear = this.visible ? this.fade.appear : 0;
     const dotA = this.fade.dotAlpha * appear, labA = this.fade.labelAlpha * appear;
 
@@ -567,7 +637,7 @@ export class VehicleLayer {
     }
     this._opa = [dotA, labA];
     // další snímek, dokud se něco hýbe / prolíná / chystá
-    if (now < (this._animUntil || 0) || this.fade.animating || this.uploads.length || (this.flash && this.items.has(this.flash))) map.triggerRepaint();
+    if (now < (this._animUntil || 0) || this.fade.animating || this.uploads.length || this._back || (this.flash && this.items.has(this.flash))) map.triggerRepaint();
   }
 
   // ───── štítky dopředu (mimo snímek mapy) ─────
@@ -587,14 +657,33 @@ export class VehicleLayer {
 
   _loop() {
     requestAnimationFrame(this._loop);
-    if (!this.queue.size || !this.gl) return;
-    // štítky po malých dávkách (při pohybu mapy menších, ať nebere čas snímkům mapy); nahrají se v příštím snímku
+    if (!this.gl) return;
+    if (!this.queue.size) { if (!this.uploads.length) this._visMissing = 0; return; }
+    // štítky po malých dávkách (při pohybu mapy menších, ať nebere čas snímkům mapy); nahrají se v příštím snímku.
+    // Nejdřív vozidla v záběru (s okrajem), ať se po otevření mapy ukážou štítky hned tam, kam se člověk dívá.
     const t0 = performance.now(), budget = this.map.isMoving() ? 2 : 6;
-    for (const k of this.queue) {
-      this.queue.delete(k);
-      if (!this.rects.has(k)) this._paint(k);
-      if (performance.now() - t0 > budget) break;
+    const target = this._target().rects;
+    const b = this.map.getBounds();
+    const padLat = (b.getNorth() - b.getSouth()) * 0.15, padLng = (b.getEast() - b.getWest()) * 0.15;
+    const S = b.getSouth() - padLat, N = b.getNorth() + padLat, W = b.getWest() - padLng, E = b.getEast() + padLng;
+    const first = [];
+    let missing = 0;
+    for (const it of this.items.values()) {
+      const v = it.v;
+      if (v.lat < S || v.lat > N || v.lng < W || v.lng > E) continue;
+      if (this.filter && !this.filter.has(it.cat)) continue;
+      if (!this.rects.has(it.key) && !(it.prevKey && this.rects.has(it.prevKey))) missing++;
+      if (this.queue.has(it.key)) first.push(it.key);
     }
+    this._visMissing = missing;
+    const paint = (k) => {
+      if (!this.queue.delete(k)) return false;
+      if (!target.has(k)) this._paint(k);
+      return performance.now() - t0 > budget;
+    };
+    let stop = false;
+    for (const k of first) if ((stop = paint(k))) break;
+    if (!stop) for (const k of this.queue) if (paint(k)) break;
     if (this.uploads.length) this.map.triggerRepaint();
   }
 
@@ -646,7 +735,7 @@ export class VehicleLayer {
       const it = this.drawn[i];
       const s = this._screen(it, now);
       if (!s) continue;
-      const r = labels ? this.rects.get(it.key) : null;
+      const r = labels ? this.rects.get(it.key) || (it.prevKey && this.rects.get(it.prevKey)) : null;
       const hw = r ? r.hw : 4.5, hh = r ? r.hh : 4.5;
       const dx = Math.abs(s[0] - px), dy = Math.abs(s[1] - py);
       const dotLike = !r;
