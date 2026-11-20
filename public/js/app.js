@@ -513,6 +513,25 @@ function dayLabel(j) {
   return `${name} ${fmtDayShort(j.day)}`;
 }
 
+/**
+ * Barva odjezdu podle druhu dopravy jako v appce (TripTable.category + barvy vozidel): autobus zelený, vlak modrý,
+ * tramvaj fialová, metro v barvě linky. Jízdní řád druh nemá: vlak podle čísla, metro / tramvaj = DP hl. m. Prahy.
+ */
+function tripStyle(t) {
+  if (t.isTrain) return { st: STYLES.TRAIN, ic: 'train' };
+  if (/Prahy/.test(t.agency || '')) {
+    const l = String(t.line).trim().toUpperCase();
+    if (l === 'A' || l === 'B' || l === 'C') return { st: STYLES[`METRO_${l}`], ic: 'metro' };
+    if ((parseInt(l, 10) || 999) < 100) return { st: STYLES.TRAM, ic: 'tram' };
+  }
+  return { st: STYLES.BUS, ic: 'bus' };
+}
+
+function depBadgeHtml(t) {
+  const { st, ic } = tripStyle(t);
+  return `<span class="badge" style="background:${st.color};color:${st.darkText ? '#000' : '#fff'}">${icon(ic)}${esc(t.line)}</span>`;
+}
+
 function badgeHtml(line, isTrain) {
   return `<span class="badge${isTrain ? ' train' : ''}">${isTrain ? icon('train') : ''}${esc(line)}</span>`;
 }
@@ -964,7 +983,7 @@ function renderStopSheet() {
     const min = Math.round((d.dep - now.sec) / 60);
     const when = min <= 0 ? 'teď' : `za ${min}${NBSP}min`;
     const head = d.isTrain ? d.head : stopLabel(d.head);
-    return `<li><button type="button" class="dep-row" data-i="${i}">${badgeHtml(t.line, t.isTrain)}<span class="dep-head">směr ${esc(head)}</span><span class="dep-time"><strong>${hhmm(d.dep % 86400)}</strong><small>${when}</small></span></button></li>`;
+    return `<li><button type="button" class="dep-row" data-i="${i}">${depBadgeHtml(t)}<span class="dep-head">směr ${esc(head)}</span><span class="dep-time"><strong>${hhmm(d.dep % 86400)}</strong><small>${when}</small></span></button></li>`;
   }).join('');
   $('#sheet-body').innerHTML = `
     <h3>Odjezdy</h3>
