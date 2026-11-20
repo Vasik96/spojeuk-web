@@ -8,6 +8,8 @@ import { MapView } from './gl-map.js';
 import { VehicleLayer, CATEGORIES, vehicleStyle, vehicleMode, lateMinutes, STYLES, LATE_COLOR } from './vehicle-layer.js';
 import { ShapeStore, legRoute, osrmRoute, footRoute, footDistances, WALK_M_PER_MIN } from './shapes.js';
 import { store } from './store.js';
+import { StopIndex, STOP_DEPARTURE_HOURS } from './stops.js';
+import { StopLayer } from './stop-layer.js';
 import {
   prettyName, splitStopName, stopLabel, hhmm, pragueNow, addDays, dayDiff, dayToIso, isoToDay, fmtMinutes, fmtDist,
   pluralStops, pluralTransfers, ageLabel, fmtDayShort, DAY_NAMES, weekday, NBSP, dedupeByUid,
@@ -59,6 +61,7 @@ const S = {
   from: null, to: null, mode: null, when: 'now',   // mode: Set druhů dopravy, null = vše
   journeys: [], desc: new Map(), expanded: new Set(), query: null, loadingMore: false, noMoreEarlier: false,
   loc: null, vehicles: [], vlayer: null, selected: null, flashUid: null,
+  stopIdx: null, slayer: null, stopSel: null, stopTimer: 0,   // zastávky na mapě a otevřený panel odjezdů
   overlay: { lines: [], markers: [] }, meMarker: null,
 };
 
@@ -112,8 +115,13 @@ function initMap() {
   });
   S.vlayer.setFilter(loadFilter());
   S.vlayer.setVisible(mapShown());
-  // ťuknutí na vozidlo řeší vrstva vozidel; jinam do mapy = zavřít detail
-  S.map.on('click', (e) => { if (S.vlayer.hitTest(e.point.x, e.point.y).length) return; if (S.selected) closeSheet(); });
+  // ťuknutí na vozidlo řeší vrstva vozidel; na zastávku = odjezdy; jinam do mapy = zavřít detail
+  S.map.on('click', (e) => {
+    if (S.vlayer.hitTest(e.point.x, e.point.y).length) return;
+    const st = S.slayer?.hitTest(e.point.x, e.point.y);
+    if (st) { openStop(st); return; }
+    if (S.selected || S.stopSel) closeSheet();
+  });
   setupFilter();
 }
 
@@ -678,7 +686,9 @@ function showJourneyOnMap(d) {
       return;
     }
     const t = tt.trips[l.tid];
-    const line = l.stops.map((x) => sp(x.stop)).filter((s) => s.hasCoords).map((s) => [s.lat, s.lng]);
+    // zastávky na nástupištích (strana silnice podle směru jízdy), stejně jako ikony zastávek na mapě
+    const lp = legPoints(l);
+    const line = lp.filter(Boolean).map((p) => [p.lat, p.lng]);
     const pl = S.map.addPolyline(line, { color: t.isTrain ? '#6a5bd8' : '#2786d6', width: 10, arrows: true });
     S.overlay.lines.push(pl);
     // přesná trasa po silnici/trati nahradí rovnou čáru, jakmile se načte
@@ -686,16 +696,30 @@ function showJourneyOnMap(d) {
     legRoute(S.shapes, tt, l.tid, l.stops.map((x) => x.stop))
       .then((r) => r || (t.isTrain ? null : osrmRoute(line)))
       .then((r) => { if (r && gen === overlayGen) pl.setPoints(r); });
-    l.stops.slice(1, -1).forEach((x) => { const s = sp(x.stop); if (s.hasCoords) dot(s.lat, s.lng, 'stopdot mid'); });
+    lp.slice(1, -1).forEach((p) => { if (p) dot(p.lat, p.lng, 'stopdot mid'); });
   });
-  // přestupy
-  d.rides.slice(0, -1).forEach((r) => { const s = sp(r.to); if (s.hasCoords) dot(s.lat, s.lng, 'stopdot', stopLabel(prettyName(s.name))); });
+  // přestupy, začátek a konec (na nástupišti své jízdy)
+  const rideLegs = d.legs.filter((l) => l.kind !== 'walk');
+  const at = (l, idx) => legPoints(l).at(idx);
+  rideLegs.slice(0, -1).forEach((l) => { const p = at(l, -1), s = sp(l.stops.at(-1).stop); if (p) dot(p.lat, p.lng, 'stopdot', stopLabel(prettyName(s.name))); });
   const first = sp(d.rides[0].from), last = sp(d.rides[d.rides.length - 1].to);
-  if (first.hasCoords) pin(first.lat, first.lng, false, stopLabel(prettyName(first.name)));
-  if (last.hasCoords) pin(last.lat, last.lng, true, stopLabel(prettyName(last.name)));
+  const fp = rideLegs.length ? at(rideLegs[0], 0) : null, lpEnd = rideLegs.length ? at(rideLegs.at(-1), -1) : null;
+  if (fp) pin(fp.lat, fp.lng, false, stopLabel(prettyName(first.name)));
+  if (lpEnd) pin(lpEnd.lat, lpEnd.lng, true, stopLabel(prettyName(last.name)));
   showRouteControls();
   setTab('map');
-  // jede-li některý spoj z cesty právě živě, zvýrazní se a přiblíží se na něj (jako v aplikaci)
+  focusLive(d);
+}
+
+/** Polohy zastávek jízdy na nástupištích (pole zarovnané s l.stops, null = bez souřadnic). */
+function legPoints(l) {
+  const ids = l.stops.map((x) => x.stop);
+  if (S.stopIdx) return S.stopIdx.platformPoints(ids);
+  return ids.map((id) => { const s = S.tt.stops[id]; return s.hasCoords ? { id, lat: s.lat, lng: s.lng } : null; });
+}
+
+/** Jede-li spoj (první jízda d) právě živě, zvýrazní se a přiblíží se na něj (jako v aplikaci). */
+function focusLive(d) {
   // vůz spoje stejně jako v appce: spárovaný se spojem (i DPMÚL podle polohy), jinak nejbližší vůz linky před nástupem
   const live = S.live.vehicleForJourney?.(d)?.v;
   const liveUid = live && S.vehicles.some((x) => vehicleUid(x) === vehicleUid(live)) ? vehicleUid(live) : null;
@@ -756,6 +780,8 @@ async function pollVehicles() {
 }
 
 function selectVehicle(uid) {
+  S.stopSel = null;
+  clearInterval(S.stopTimer);
   S.selected = uid;
   S.vlayer.setSelected(uid);
   renderSheet();
@@ -765,6 +791,8 @@ function selectVehicle(uid) {
 
 function closeSheet() {
   S.selected = null;
+  S.stopSel = null;
+  clearInterval(S.stopTimer);
   // detail zajede dolů (na mobilu přes celou výšku, na počítači jen kousek)
   const sh = $('#sheet');
   hideEl(sh, isMobile() ? { y: Math.max(120, sh.offsetHeight), duration: 220 } : { y: 16, duration: 170 });
@@ -846,6 +874,77 @@ async function fetchRemoteTrip(v) {
   if (S.selected === v.uid) renderSheet();
 }
 
+// ───────────── zastávky: odjezdy ─────────────
+function openStop(st) {
+  S.selected = null;
+  S.vlayer?.setSelected(null);
+  S.stopSel = st;
+  renderStopSheet();
+  clearInterval(S.stopTimer);
+  S.stopTimer = setInterval(() => { if (S.stopSel) renderStopSheet(); }, 30_000);   // odjeté zmizí
+}
+
+function renderStopSheet() {
+  const st = S.stopSel;
+  if (!st) return;
+  const now = pragueNow();
+  const deps = S.stopIdx.departures(st, now);
+  S.stopDeps = deps;
+  const rows = deps.map((d, i) => {
+    const t = S.tt.trips[d.tid];
+    const min = Math.round((d.dep - now.sec) / 60);
+    const when = min <= 0 ? 'teď' : `za ${min}${NBSP}min`;
+    const head = d.isTrain ? d.head : stopLabel(d.head);
+    return `<li><button type="button" class="dep-row" data-i="${i}">${badgeHtml(t.line, t.isTrain)}<span class="dep-head">směr ${esc(head)}</span><span class="dep-time"><strong>${hhmm(d.dep % 86400)}</strong><small>${when}</small></span></button></li>`;
+  }).join('');
+  $('#sheet-body').innerHTML = `
+    <h3>Odjezdy</h3>
+    <p class="stop-name">${esc(st.name)}</p>
+    <p class="age">Podle jízdního řádu, nejbližší ${STOP_DEPARTURE_HOURS}${NBSP}hodiny</p>
+    ${deps.length ? `<ol class="stop-deps">${rows}</ol>` : `<p class="age">V příštích ${STOP_DEPARTURE_HOURS}${NBSP}hodinách odsud nic nejede.</p>`}`;
+  showEl($('#sheet'));
+}
+
+// ťuknutí na odjezd: vlnka, panel sjede dolů, na mapě celá trasa spoje a jeho vůz
+$('#sheet-body').addEventListener('click', (e) => {
+  const btn = e.target.closest('.dep-row');
+  if (!btn || !S.stopSel) return;
+  const d = S.stopDeps?.[+btn.dataset.i];
+  if (!d) return;
+  const r = btn.getBoundingClientRect();
+  const wave = document.createElement('span');
+  wave.className = 'ripple';
+  const size = Math.max(r.width, r.height) * 2;
+  wave.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX - r.left - size / 2}px;top:${e.clientY - r.top - size / 2}px`;
+  btn.append(wave);
+  setTimeout(() => { closeSheet(); showDeparture(d); }, 170);
+});
+
+function showDeparture(dep) {
+  clearOverlay();
+  const tt = S.tt, t = tt.trips[dep.tid];
+  const ids = Array.from(t.stops);
+  const pts = S.stopIdx.platformPoints(ids);
+  const line = pts.filter(Boolean).map((p) => [p.lat, p.lng]);
+  const pl = S.map.addPolyline(line, { color: t.isTrain ? '#6a5bd8' : '#2786d6', width: 10, arrows: true });
+  S.overlay.lines.push(pl);
+  const gen = overlayGen;
+  legRoute(S.shapes, tt, dep.tid, ids)
+    .then((r) => r || (t.isTrain ? null : osrmRoute(line)))
+    .then((r) => { if (r && gen === overlayGen) pl.setPoints(r); });
+  const real = pts.map((p, i) => [p, i]).filter(([p]) => p);
+  real.forEach(([p, i], k) => {
+    const name = prettyName(tt.stops[ids[i]].name);
+    if (k === 0 || k === real.length - 1) pin(p.lat, p.lng, k === real.length - 1, stopLabel(name));
+    else dot(p.lat, p.lng, `stopdot${ids[i] === dep.from ? '' : ' mid'}`, ids[i] === dep.from ? stopLabel(name) : null);
+  });
+  showRouteControls();
+  setTab('map');
+  // celá trasa do záběru, pak případně přiblížení na vůz
+  S.map.fitBounds(line, { padding: { bottom: 60 } });
+  focusLive({ rides: [{ tid: dep.tid, from: dep.from, to: ids.at(-1), dep: dep.dep }], day: dep.day });
+}
+
 function drawVehicleRoute(d) {
   clearOverlay();
   const pl = S.map.addPolyline(d.shape || d.route, { color: d.trip.isTrain ? '#6a5bd8' : '#2786d6', width: 10, arrows: true });
@@ -855,11 +954,14 @@ function drawVehicleRoute(d) {
   (d.shape ? Promise.resolve(null) : S.shapes.points(d.trip.shp))
     .then((r) => r || (d.shape || d.trip.isTrain ? null : osrmRoute(d.route)))
     .then((r) => { if (r && gen === overlayGen) pl.setPoints(r); });
+  // spoj z jízdního řádu webu: zastávky na nástupištích (jako ikony zastávek na mapě)
+  const plat = d.tid && S.stopIdx ? S.stopIdx.platformPoints(d.stops.map((s) => s.id)) : null;
   d.stops.forEach((s, i) => {
     if (!s.has) return;
+    const p = plat?.[i] || s;
     const isNext = i === d.nextIdx, isEnd = i === d.stops.length - 1;
-    if (i === 0 || isEnd) pin(s.lat, s.lng, isEnd, stopLabel(s.name));
-    else dot(s.lat, s.lng, `stopdot${isNext ? ' next' : ' mid'}`, isNext ? stopLabel(s.name) : null);
+    if (i === 0 || isEnd) pin(p.lat, p.lng, isEnd, stopLabel(s.name));
+    else dot(p.lat, p.lng, `stopdot${isNext ? ' next' : ' mid'}`, isNext ? stopLabel(s.name) : null);
   });
   showRouteControls();
 }
@@ -950,6 +1052,11 @@ async function boot() {
   S.planner = new Planner(S.tt);
   S.live = new LiveTracker(S.tt);
   S.index = S.tt.placeIndex();
+  // zastávky na mapě (nástupiště podle míst a směru jízdy, jako v appce)
+  try {
+    S.stopIdx = new StopIndex(S.tt, pragueNow().day);
+    S.slayer = new StopLayer(S.map.map, S.stopIdx);
+  } catch (e) { console.warn('zastávky na mapě', e); }
   $('#loading').hidden = true;
   $('#search-form').hidden = false;
   setupForm();

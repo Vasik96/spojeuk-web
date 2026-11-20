@@ -284,3 +284,16 @@ dialog.closing[open]::backdrop { animation: fade-out .18s ease forwards; }
 .toast[hidden] { display: none; }
 @media (min-width: 960px) { .toast { bottom: 28px; } }
 
+
+/* ───────────── zastávky: odjezdy ───────────── */
+.sheet .stop-name { font-size: 1.35rem; font-weight: 800; margin: 0 0 .1rem; }
+.stop-deps { list-style: none; margin: .8rem 0 0; padding: .6rem 0 0; border-top: 1px solid var(--line); display: grid; gap: .15rem; }
+.dep-row { position: relative; overflow: hidden; display: flex; align-items: center; gap: .75rem; width: 100%; padding: .55rem .45rem; border: 0; border-radius: 14px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background .15s; }
+.dep-row:hover { background: var(--surface-2); }
+.dep-row .badge { min-width: 3.2rem; flex: none; }
+.dep-head { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.dep-time { display: grid; justify-items: end; line-height: 1.15; flex: none; }
+.dep-time small { color: var(--brand-600); font-size: .8rem; }
+.dep-row .ripple { position: absolute; border-radius: 50%; background: currentColor; opacity: .14; transform: scale(0); animation: ripple .45s ease-out forwards; pointer-events: none; }
+@keyframes ripple { to { transform: scale(1); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .dep-row .ripple { display: none; } }

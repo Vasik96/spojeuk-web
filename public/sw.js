@@ -1,9 +1,9 @@
 // Service worker: aplikace a jízdní řády fungují offline (živé polohy a dlaždice mapy vždy ze sítě).
-const VERSION = 'v32';
+const VERSION = 'v33';
 const CACHE = `spojeuk-${VERSION}`;
 const SHELL = [
   '/', '/css/base.css', '/css/app.css', '/assets/icons.svg', '/assets/logo.svg', '/assets/favicon.svg', '/manifest.webmanifest',
-  '/js/app.js', '/js/config.js', '/js/util.js', '/js/timetable.js', '/js/planner.js', '/js/suggest.js', '/js/live.js', '/js/gl-map.js', '/js/vehicle-layer.js', '/js/map-style.js', '/js/shapes.js', '/vendor/maplibre-gl-csp.js', '/vendor/maplibre-gl-csp-worker.js', '/vendor/maplibre-gl.css', '/js/store.js', '/js/theme-init.js',
+  '/js/app.js', '/js/config.js', '/js/util.js', '/js/timetable.js', '/js/planner.js', '/js/suggest.js', '/js/live.js', '/js/gl-map.js', '/js/vehicle-layer.js', '/js/map-style.js', '/js/shapes.js', '/vendor/maplibre-gl-csp.js', '/vendor/maplibre-gl-csp-worker.js', '/vendor/maplibre-gl.css', '/js/store.js', '/js/theme-init.js', '/js/stops.js', '/js/stop-layer.js',
 ];
 
 self.addEventListener('install', (e) => {
