@@ -14,13 +14,13 @@ const tt = new Timetable(JSON.parse(fs.readFileSync(dataFile, 'utf8')));
 
 // první pondělí po sestavení dat (vlaky mají kalendář jen od data sestavení)
 const DAY = (() => { let d = tt.meta.built.slice(0, 10).replaceAll('-', ''); while (weekday(d) !== 0) d = addDays(d, 1); return d; })();
-const idx = new StopIndex(tt, DAY);
+const idx = new StopIndex(tt);
 const icons = (name) => idx.stops.filter((s) => s.name === `Ústí nad Labem, ${name}`);
 
 test('zastávky v Ústí: počty nástupišť jako ve skutečnosti (stejně jako v appce)', () => {
   const expected = {
     'Stříbrníky': 4, 'Bělehradská': 3, 'Poliklinika': 3,
-    'Ovčácká stezka': 2, 'V Rokli': 2, 'Karla IV.': 2, 'Sociální péče': 2, 'Mírové náměstí': 2, 'Divadlo': 2,
+    'Ovčácká stezka': 2, 'Nové Skorotice': 2, 'V Rokli': 2, 'Karla IV.': 2, 'Sociální péče': 2, 'Mírové náměstí': 2, 'Divadlo': 2,
   };
   for (const [name, n] of Object.entries(expected)) {
     const bus = icons(name).filter((s) => s.kind !== 'rail');

@@ -799,6 +799,75 @@ function closeSheet() {
   S.vlayer?.setSelected(null);
 }
 $('#sheet-close').addEventListener('click', () => closeSheet());
+
+// ───────────── panel: stažení dolů prstem (jako bottom sheet v appce) ─────────────
+// Panel jde za prstem; dost daleko nebo rychle dolů = plynule odjede a zavře se, jinak se vrátí. Táhne se,
+// jen když je obsah panelu nahoře (jinak se normálně posouvá). Na širokém displeji je panel boční, netáhne se.
+(function setupSheetDrag() {
+  const sh = $('#sheet');
+  const bottomSheet = () => !matchMedia('(min-width: 960px)').matches;
+  let y0 = 0, x0 = 0, dy = 0, dragging = false, tracking = false, lastY = 0, lastT = 0, vel = 0, suppressClick = false;
+
+  const start = (x, y) => {
+    if (!bottomSheet() || sh.hidden || sh._hiding) return;
+    tracking = true; dragging = false; y0 = lastY = y; x0 = x; dy = 0; vel = 0; lastT = performance.now();
+  };
+  const move = (x, y, e) => {
+    if (!tracking) return;
+    const d = y - y0;
+    if (!dragging) {
+      // začít táhnout jen směrem dolů, z horního okraje obsahu, a víc svisle než vodorovně
+      if (d > 6 && sh.scrollTop <= 0 && Math.abs(d) > Math.abs(x - x0)) {
+        dragging = true; y0 = y; sh.style.animation = 'none';
+      } else if (Math.abs(d) > 6) { tracking = false; return; } else return;
+    }
+    e?.preventDefault();
+    dy = Math.max(0, y - y0);
+    const now = performance.now();
+    if (now > lastT) vel = 0.7 * vel + 0.3 * ((y - lastY) / (now - lastT));
+    lastY = y; lastT = now;
+    sh.style.transform = `translateY(${dy}px)`;
+  };
+  const end = () => {
+    if (!tracking) return;
+    tracking = false;
+    if (!dragging) return;
+    dragging = false;
+    suppressClick = true; setTimeout(() => { suppressClick = false; }, 50);
+    const h = sh.offsetHeight;
+    const out = dy > Math.max(90, h * 0.28) || vel > 0.55;
+    const from = `translateY(${dy}px)`;
+    if (out) {
+      // dojezd rychlostí prstu (nejméně ~ plynulých 140 ms, nejvýš 260 ms)
+      const dur = Math.min(260, Math.max(140, (h - dy) / Math.max(vel, 1.2)));
+      const a = sh.animate([{ transform: from }, { transform: `translateY(${h + 24}px)` }], { duration: reduceMotion() ? 0 : dur, easing: 'cubic-bezier(.3, .7, .4, 1)', fill: 'forwards' });
+      a.finished.then(() => {
+        sh.hidden = true; sh.style.transform = ''; sh.style.animation = ''; a.cancel();
+        closeSheet();
+      }).catch(() => {});
+    } else {
+      const a = sh.animate([{ transform: from }, { transform: 'translateY(0)' }], { duration: reduceMotion() ? 0 : 220, easing: EASE_OUT });
+      sh.style.transform = '';
+      a.finished.then(() => { sh.style.animation = ''; }).catch(() => {});
+    }
+  };
+
+  sh.addEventListener('touchstart', (e) => { if (e.touches.length === 1) start(e.touches[0].clientX, e.touches[0].clientY); }, { passive: true });
+  sh.addEventListener('touchmove', (e) => move(e.touches[0].clientX, e.touches[0].clientY, e), { passive: false });
+  sh.addEventListener('touchend', end);
+  sh.addEventListener('touchcancel', end);
+  // myš (tablet s myší, vývoj): stejné chování
+  sh.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;
+    // myší se táhne panel, ne označuje text (výběr by obsah posunul a tažení by nezačalo)
+    if (bottomSheet() && !e.target.closest('input, textarea, select')) e.preventDefault();
+    start(e.clientX, e.clientY);
+  });
+  window.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse') move(e.clientX, e.clientY, e); });
+  window.addEventListener('pointerup', (e) => { if (e.pointerType === 'mouse') end(); });
+  // po stažení neklikat na řádek / tlačítko, nad kterým prst skončil
+  sh.addEventListener('click', (e) => { if (suppressClick) { e.stopPropagation(); e.preventDefault(); } }, true);
+})();
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.selected) closeSheet(); });
 
 /** Název zdroje, ze kterého se právě používá poloha vozidla (např. "DPMÚL"). */
@@ -1054,7 +1123,7 @@ async function boot() {
   S.index = S.tt.placeIndex();
   // zastávky na mapě (nástupiště podle míst a směru jízdy, jako v appce)
   try {
-    S.stopIdx = new StopIndex(S.tt, pragueNow().day);
+    S.stopIdx = new StopIndex(S.tt);
     S.slayer = new StopLayer(S.map.map, S.stopIdx);
   } catch (e) { console.warn('zastávky na mapě', e); }
   $('#loading').hidden = true;

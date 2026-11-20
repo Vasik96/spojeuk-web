@@ -4,6 +4,8 @@
 //    (jiná předchozí zastávka a protisměr na jiném místě, např. Stříbrníky); slabý proud (< 25 %) ne
 //  - jedno místo: nástupiště podle směru jízdy (úhel předchozí → další zastávka), posunutá vpravo od silnice
 //  - místo s nepatrným provozem (< 5 % odjezdů zastávky) patří k nejbližšímu většímu, vlaky mají ikonu zvlášť
+//  - jeden bod jízdního řádu má nejvýš 2 nástupiště (strany silnice); víc jen zastávky s víc body
+//  - počítá se ze spojů všech dnů; zastávka / nástupiště, odkud nikdy nic neodjíždí, se nezobrazí
 import { addDays, distanceM, prettyName } from './util.js';
 
 const MERGE_M = 300;
@@ -15,6 +17,15 @@ const MINOR_SHARE = 0.25;
 const OPPOSITE_DEG = 150;
 const TINY_PLACE_SHARE = 0.05;
 const BINS = 36;
+const MAX_DIRS_PER_POINT = 2;
+
+/**
+ * Poloha vlakové ikony tam, kde vlakové záznamy jízdního řádu leží přímo v kolejišti a ikonu by zakrývaly vlaky
+ * (ťuknutí by trefilo vlak): před výpravní budovou. Stejné jako RAIL_POS v StopMap.kt v appce.
+ */
+const RAIL_POS = {
+  'Ústí nad Labem,Hlavní nádraží': [50.65951, 14.04404],
+};
 
 export const STOP_DEPARTURE_HOURS = 3;
 
@@ -117,6 +128,13 @@ function groupDirs(binW) {
     into.bins.push(...minor.bins); into.w += minor.w; into.x += minor.x; into.y += minor.y;
     groups.splice(groups.indexOf(minor), 1);
   }
+  // jeden bod jízdního řádu = nejvýš dvě strany silnice: další směr (boční ulice) k úhlově nejbližšímu
+  groups.sort((a, b) => b.w - a.w);
+  while (groups.length > MAX_DIRS_PER_POINT) {
+    const minor = groups.pop();
+    const into = groups.reduce((a, b) => (angleDiff(mean(a), mean(minor)) <= angleDiff(mean(b), mean(minor)) ? a : b));
+    into.bins.push(...minor.bins); into.w += minor.w; into.x += minor.x; into.y += minor.y;
+  }
   return groups.sort((a, b) => b.w - a.w).map((g) => ({ ...g, mean: mean(g) }));
 }
 
@@ -175,11 +193,8 @@ function tripsAround(tt, day) {
 }
 
 export class StopIndex {
-  /**
-   * @param {import('./timetable.js').Timetable} tt
-   * @param {string} day YYYYMMDD: spoje toho dne určují směry a vlakové záznamy
-   */
-  constructor(tt, day) {
+  /** @param {import('./timetable.js').Timetable} tt (směry a nástupiště ze spojů všech dnů) */
+  constructor(tt) {
     this.tt = tt;
     this.dirStopsOf = new Map();
     const stops = [];
@@ -201,12 +216,10 @@ export class StopIndex {
       }
     }
 
-    // 2. průjezdy autobusů (spoje toho dne, kromě konečné), vlakové záznamy
-    const today = tt.activeSvcs(day);
+    // 2. průjezdy autobusů (spoje všech dnů, kromě konečné), vlakové záznamy
     const nameOf = (id) => tt.stops[id]?.name || '';
     for (let tid = 1; tid < tt.trips.length; tid++) {
       const t = tt.trips[tid];
-      if (!today.has(t.svc)) continue;
       const st = t.stops;
       for (let pos = 0; pos < st.length - 1; pos++) {
         const s = st[pos];
@@ -227,7 +240,6 @@ export class StopIndex {
     // 3. ikony
     for (const cl of clusters) {
       const name = prettyName(cl.name);
-      let any = false;
       const busPlaces = cl.places.filter((p) => p.w > 0).sort((a, b) => b.w - a.w);
       const totalW = busPlaces.reduce((s, p) => s + p.w, 0);
       for (const pl of busPlaces.slice().reverse()) {
@@ -270,22 +282,14 @@ export class StopIndex {
         });
         stops.push(...list);
         for (const id of ids) this.dirStopsOf.set(id, list);
-        any = true;
       }
       if (cl.railIds.size) {
         const src = cl.stops.filter((s) => cl.railIds.has(s.id));
-        stops.push({
-          key: `r${cl.ids[0]}`, name, ttStops: cl.ids, kind: 'rail',
-          lat: src.reduce((s, x) => s + x.lat, 0) / src.length, lng: src.reduce((s, x) => s + x.lng, 0) / src.length,
-        });
-        any = true;
+        const [lat, lng] = RAIL_POS[cl.name] ||
+          [src.reduce((s, x) => s + x.lat, 0) / src.length, src.reduce((s, x) => s + x.lng, 0) / src.length];
+        stops.push({ key: `r${cl.ids[0]}`, name, ttStops: cl.ids, kind: 'rail', lat, lng });
       }
-      if (!any) {
-        stops.push({
-          key: `t${cl.ids[0]}`, name, ttStops: cl.ids, kind: 'all',
-          lat: cl.stops.reduce((s, x) => s + x.lat, 0) / cl.stops.length, lng: cl.stops.reduce((s, x) => s + x.lng, 0) / cl.stops.length,
-        });
-      }
+      // zastávka, odkud nic neodjíždí (jen výstup, zrušený záznam), se nezobrazuje
     }
     stops.sort((a, b) => a.lat - b.lat);
     this.stops = stops;
