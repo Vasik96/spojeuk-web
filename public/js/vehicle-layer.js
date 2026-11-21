@@ -31,7 +31,9 @@ export const STYLES = {
   FUNICULAR: { color: '#6D4C41', route: '#4E342E', routeDark: '#A1887F' },
 };
 export const LATE_COLOR = '#D32F2F';
-const HL_COLORS = ['#FFD54F', '#FF6D00'];   // krátké upozornění na vůz (po „Mapa“ u spojení na mobilu)
+// krátké upozornění na vůz (po „Mapa“ u spojení na mobilu): barvy motivu (nastavuje app.js podle světlého / tmavého),
+// fáze 1 = hlavní barva, 2 = tmavší odstín, obrys v barvě plochy
+const HL = { bg: ['#3d9de8', '#1d6cb2'], fg: ['#fff', '#fff'], stroke: '#fff' };
 const SEL_RING = 'rgba(61, 157, 232, .55)';  // vybrané vozidlo: modrý kroužek jako dřívější .veh.sel
 
 /** Druh dopravy: ze serveru (`mode`), u starších odpovědí odvozený z PID uid ("g0:…" tramvaj) a linek metra. */
@@ -133,11 +135,11 @@ function drawLabel(line, styleKey, phase, late, dpr, alpha = 1, target = null) {
   if (ring) { g.fillStyle = LATE_COLOR; roundRect(g, 0, 0, w, h, h / 2); g.fill(); }
   const stroke = hl ? 2.5 : 0;
   const ins = stroke / 2;
-  g.fillStyle = hl ? HL_COLORS[phase - 1] : st.color;
+  g.fillStyle = hl ? HL.bg[phase - 1] : st.color;
   roundRect(g, ring + ins, ring + ins, pillW - 2 * ins, hPx - 2 * ins, (hPx - 2 * ins) / 2);
   g.fill();
-  if (hl) { g.strokeStyle = '#fff'; g.lineWidth = stroke; g.stroke(); }
-  g.fillStyle = phase === 1 || (!hl && st.darkText) ? '#000' : '#fff';
+  if (hl) { g.strokeStyle = HL.stroke; g.lineWidth = stroke; g.stroke(); }
+  g.fillStyle = hl ? HL.fg[phase - 1] : st.darkText ? '#000' : '#fff';
   g.font = font(size);
   g.textAlign = 'center';
   g.textBaseline = 'middle';
@@ -355,6 +357,13 @@ export class VehicleLayer {
 
   setFilter(cats) { this.filter = cats; this._rebuild = true; this._camKey = null; this.map.triggerRepaint(); }
   setSelected(uid) { this.selected = uid; this._rebuild = true; this.map.triggerRepaint(); }
+  /** Barvy zvýraznění podle motivu: bg/fg = [fáze 1, fáze 2], stroke = obrys. */
+  setHighlightColors({ bg, fg, stroke }) {
+    HL.bg = bg; HL.fg = fg; HL.stroke = stroke;
+    this.selBmp.clear();
+    this.map.triggerRepaint();
+  }
+
   setFlash(uid) { this.flash = uid; this._rebuild = true; this.map.triggerRepaint(); }
 
   /** Mapa schovaná (jiná záložka): po návratu se vozidla znovu plynule objeví. */

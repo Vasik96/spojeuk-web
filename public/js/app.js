@@ -10,6 +10,7 @@ import { ShapeStore, legRoute, osrmRoute, footRoute, footDistances, WALK_M_PER_M
 import { store } from './store.js';
 import { StopIndex, STOP_DEPARTURE_HOURS } from './stops.js';
 import { StopLayer } from './stop-layer.js';
+import { rideIndices, activeLegIndex, transferStatus, arrivingBy, distanceToRouteM } from './journey-logic.js';
 import {
   prettyName, splitStopName, stopLabel, hhmm, pragueNow, addDays, dayDiff, dayToIso, isoToDay, fmtMinutes, fmtDist,
   pluralStops, pluralTransfers, ageLabel, fmtDayShort, DAY_NAMES, weekday, NBSP, dedupeByUid, distanceM,
@@ -63,6 +64,10 @@ const S = {
   loc: null, vehicles: [], vlayer: null, selected: null, flashUid: null,
   stopIdx: null, slayer: null, stopSel: null, stopTimer: 0,   // zastávky na mapě a otevřený panel odjezdů
   overlay: { lines: [], markers: [] }, meMarker: null,
+  arrive: false,             // zvolený čas je příjezd ("chci tam být do"), ne odjezd
+  detail: null,              // spojení otevřené v detailu (popis z describeJourney)
+  collapsed: new Set(),      // sbalené mezizastávky v detailu (index jízdy)
+  nearby: null,              // odjezdy z nejbližší zastávky { place, distM, platforms, deps }
 };
 
 // ───────────── motiv ─────────────
@@ -80,9 +85,23 @@ function applyTheme() {
   b.innerHTML = icon(THEME_ICON[t]);
   b.setAttribute('aria-label', `Vzhled: ${THEME_LABEL[t]}. Klepnutím změníš.`);
   S.map?.setTheme(resolvedTheme());
+  applyHighlightColors();
   const m = $('meta[name="theme-color"]');
   if (m) m.content = resolvedTheme() === 'dark' ? '#05111f' : '#3d9de8';
 }
+/** Zvýraznění vozu po „Mapa“ v barvách motivu (hlavní barva, tmavší odstín, obrys v barvě plochy). */
+function applyHighlightColors() {
+  if (!S.vlayer) return;
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n) => cs.getPropertyValue(n).trim();
+  const dark = resolvedTheme() === 'dark';
+  S.vlayer.setHighlightColors({
+    bg: [v('--brand'), dark ? v('--brand-300') : v('--brand-700')],
+    fg: [dark ? '#04243d' : '#fff', '#fff'],
+    stroke: v('--surface') || '#fff',
+  });
+}
+
 $('#theme-btn').addEventListener('click', () => {
   const order = ['auto', 'light', 'dark'];
   store.setTheme(order[(order.indexOf(store.theme()) + 1) % 3]);
@@ -102,9 +121,51 @@ function setTab(tab) {
   $$('.tabbar button').forEach((b) => (b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
   if (tab === 'map') requestAnimationFrame(() => S.map?.invalidate());
   requestAnimationFrame(() => S.vlayer?.setVisible(mapShown()));
-  try { history.replaceState(null, '', tab === 'map' ? '#map' : location.pathname + location.search); } catch { /* ignore */ }
+  // stav historie (otevřené podobrazovky) se zachová, mění se jen adresa
+  try { history.replaceState(history.state, '', tab === 'map' ? '#map' : location.pathname + location.search); } catch { /* ignore */ }
 }
-$$('.tabbar button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+// ───────────── podobrazovky a zpět ─────────────
+// Výsledky, detail spojení a (na mobilu) mapa jsou záznamy v historii prohlížeče: tlačítko i gesto zpět vrací
+// o krok (detail → výsledky → formulář, mapa → odkud se na ni šlo), stejně jako v Android appce.
+let navStack = [];
+const navTop = () => navStack[navStack.length - 1];
+
+function showView(el, on) {
+  if (on) {
+    if (!el.hidden && !el._hiding) return;
+    showEl(el);
+    if (!reduceMotion()) el.animate([{ transform: 'translateX(24%)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 260, easing: EASE_OUT });
+  } else hideEl(el, { y: 0, duration: 180 });
+}
+
+function applyNav(stack) {
+  navStack = stack;
+  showView($('#results-view'), stack.includes('results'));
+  showView($('#detail-view'), stack.includes('detail'));
+  if (!stack.includes('detail')) S.detail = null;
+  if (isMobile()) setTab(navTop() === 'map' ? 'map' : 'search');
+}
+function navPush(name) {
+  const stack = [...navStack.filter((x) => x !== name), name];
+  history.pushState({ nav: stack }, '', name === 'map' ? '#map' : location.pathname + location.search);
+  applyNav(stack);
+}
+/** Zpět o krok (tlačítko šipky v podobrazovce): přes historii, ať sedí i tlačítko zpět prohlížeče. */
+function navBack() { if (navStack.length) history.back(); }
+window.addEventListener('popstate', (e) => applyNav(e.state?.nav || []));
+$$('[data-back]').forEach((b) => b.addEventListener('click', navBack));
+
+/** Přepnutí na mapu (Mapa u spojení, odjezd): na mobilu jako krok v historii, ať zpět vrátí, odkud se přišlo. */
+function goMap() {
+  if (isMobile()) { if (navTop() !== 'map') navPush('map'); } else setTab('map');
+}
+
+$$('.tabbar button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.tab === 'map') goMap();
+  else if (navTop() === 'map') navBack();
+  else setTab('search');
+}));
 
 // ───────────── mapa ─────────────
 function initMap() {
@@ -190,7 +251,7 @@ function setupFilter() {
   sync();
 }
 
-/** Druhy dopravy pro hledání spojení: stejný dialog jako na mapě; pamatuje se, změna hledá znovu. */
+/** Druhy dopravy pro hledání spojení: stejný dialog jako na mapě; pamatuje se, hledá se až tlačítkem. */
 function setupModeFilter() {
   const saved = store.get('searchCats', null);
   if (Array.isArray(saved)) {
@@ -204,12 +265,11 @@ function setupModeFilter() {
     $('#mode-dots').innerHTML = CATEGORIES.filter((c) => !S.mode || S.mode.has(c.id)).map((c) => `<span class="filter-dot" style="background:${CAT_COLOR[c.id]}"></span>`).join('');
   };
   $('#mode-btn').addEventListener('click', () => {
-    const before = catSummary(S.mode);
     openCategoryDialog('Čím cestovat', S.mode, (set) => {
       S.mode = set;
       store.set('searchCats', set ? [...set] : ALL_CATS);
       sync();
-    }, () => { if (catSummary(S.mode) !== before && S.query) runSearch(); }, { allowEmpty: false });
+    }, null, { allowEmpty: false });
   });
   sync();
 }
@@ -382,6 +442,7 @@ async function useMyLocation() {
     let best = cands[0], walkM = null;
     if (walk) cands.forEach((c, i) => { if (walk[i] != null && (walkM == null || walk[i] < walkM)) { walkM = walk[i]; best = c; } });
     $('[data-field="from"]').setValue(best.place);
+    refreshNearby({ relocate: true });
     const how = walkM != null
       ? `${fmtDist(walkM)} pěšky, asi ${Math.max(1, Math.round(walkM / WALK_M_PER_MIN))}${NBSP}min`
       : `${fmtDist(best.dist)} vzdušnou čarou`;
@@ -406,11 +467,18 @@ function setupForm() {
       $('#time-input').value = hhmm(n.sec);
     }
   }));
+  // zvolený čas = odjezd, nebo příjezd ("chci tam být do"); hledá se až tlačítkem
+  $$('[data-arrive]').forEach((b) => b.addEventListener('click', () => {
+    S.arrive = b.dataset.arrive === '1';
+    $$('[data-arrive]').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+    $('#time-label').textContent = S.arrive ? 'Čas příjezdu' : 'Čas odjezdu';
+  }));
   setupModeFilter();
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); runSearch(); });
   $('#earlier').addEventListener('click', loadEarlier);
   $('#later').addEventListener('click', loadLater);
-  new IntersectionObserver((es) => { if (es.some((x) => x.isIntersecting) && S.journeys.length) loadLater(true); }, { root: $('#scroll'), rootMargin: '0px 0px 200px 0px' }).observe($('#more'));
+  new IntersectionObserver((es) => { if (es.some((x) => x.isIntersecting) && S.journeys.length && !S.query?.arrive) loadLater(true); }, { root: $('#res-scroll'), rootMargin: '0px 0px 200px 0px' }).observe($('#more'));
+  renderTrips();
 
   // předvyplnění z minulé cesty
   const last = store.lastTrip();
@@ -445,20 +513,55 @@ async function runSearch() {
   await tick();
   try {
     store.recordUsage(S.from); store.recordUsage(S.to); store.saveTrip(S.from, S.to);
+    renderTrips();
     const start = startTime();
+    const arrive = S.arrive && S.when === 'custom';
     const t0 = performance.now();
-    const js = S.planner.find(S.from, S.to, start, { count: 8, mode: S.mode });
-    S.query = { from: S.from, to: S.to, mode: S.mode, start };
+    const js = arrive ? findArrivingBy(S.from, S.to, start) : S.planner.find(S.from, S.to, start, { count: 8, mode: S.mode });
+    S.query = { from: S.from, to: S.to, mode: S.mode, start, arrive, label: whenLabel(start, arrive) };
     S.journeys = js; S.desc.clear(); S.expanded.clear(); S.noMoreEarlier = false;
     console.debug(`[hledání] ${js.length} spojení za ${Math.round(performance.now() - t0)} ms`);
     renderResults(true);
-    $('#scroll').scrollTo({ top: $('#results').offsetTop - 80, behavior: 'smooth' });
+    if (navTop() !== 'results') { if (navStack.includes('results')) navBack(); else navPush('results'); }
+    // podle příjezdu: nejlepší (nejpozdější odjezd, který ještě stihne) je poslední => ukázat ho
+    requestAnimationFrame(() => {
+      const sc = $('#res-scroll');
+      sc.scrollTo({ top: arrive ? sc.scrollHeight : 0 });
+    });
   } catch (e) {
     console.error(e);
     formMessage('Hledání selhalo. Zkus to prosím znovu.');
   } finally {
     btn.disabled = false; btn.lastChild.textContent = 'Najít spojení';
   }
+}
+
+/**
+ * Spojení s příjezdem nejpozději v deadline. Plánovač hledá jen dopředu: hledá se od okamžiku před cílovým časem
+ * (okno 1,5 → 3 → 6 → 12 h, dokud nejsou aspoň 3 vyhovující) a vezmou se ta s nejpozdějším odjezdem.
+ */
+function findArrivingBy(from, to, deadline) {
+  const now = pragueNow();
+  const today = dayDiff(now.day, deadline.day) === 0;
+  let best = [];
+  for (const win of [90, 180, 360, 720]) {
+    let sec = deadline.sec - win * 60;
+    const clamped = today && deadline.sec > now.sec && sec < now.sec;   // do minulosti se nehledá
+    if (clamped) sec = now.sec;
+    const js = S.planner.find(from, to, { day: deadline.day, sec: Math.max(0, sec) }, { count: 16, mode: S.mode });
+    const ok = arrivingBy(js, deadline.day, deadline.sec, dayDiff);
+    if (ok.length > best.length) best = ok;
+    if (ok.length >= 3 || clamped || sec <= 0) break;
+  }
+  return best.slice(-8);
+}
+
+/** Popisek zvoleného času: "dnes 18:30", u příjezdu "Příjezd do dnes 18:30". */
+function whenLabel(start, arrive) {
+  if (S.when === 'now') return 'Teď';
+  const diff = dayDiff(pragueNow().day, start.day);
+  const day = diff === 0 ? 'dnes' : diff === 1 ? 'zítra' : fmtDayShort(start.day);
+  return `${arrive ? 'Příjezd do ' : ''}${day} ${hhmm(start.sec)}`;
 }
 
 async function loadMore(fn) {
@@ -474,7 +577,7 @@ async function loadMore(fn) {
 }
 
 async function loadLater(auto = false) {
-  if (!S.query || S.loadingMore) return;
+  if (!S.query || S.loadingMore || S.query.arrive) return;   // podle příjezdu: pozdější by nedorazily včas
   const { from, to, mode } = S.query;
   const n = await loadMore(() => S.planner.moreLater(from, to, S.journeys, { mode }));
   if (n === 0 && !auto) $('#later').textContent = 'Další spoje už nejedou';
@@ -531,87 +634,100 @@ function tripStyle(t) {
 const routeOf = (st) => (resolvedTheme() === 'dark' ? st.routeDark : st.route);
 const routeColor = (t) => routeOf(tripStyle(t).st);
 
-function depBadgeHtml(t) {
+function depBadgeHtml(t, big = false) {
   const { st, ic } = tripStyle(t);
-  return `<span class="badge" style="background:${st.color};color:${st.darkText ? '#000' : '#fff'}">${icon(ic)}${esc(t.line)}</span>`;
+  return `<span class="badge${big ? ' big' : ''}" style="background:${st.color};color:${st.darkText ? '#000' : '#fff'}">${icon(ic)}${esc(t.line)}</span>`;
 }
 
 function badgeHtml(line, isTrain) {
   return `<span class="badge${isTrain ? ' train' : ''}">${isTrain ? icon('train') : ''}${esc(line)}</span>`;
 }
 
-function delayTag(d) {
-  const v = S.live?.forTrip(d.rides[0].tid);
-  if (!v || dayDiff(pragueNow().day, d.day) !== 0) return '';
-  if (v.delay >= 1) return `<span class="tag${v.delay > CONFIG.LATE_MIN ? ' late' : ''}">Zpoždění ${v.delay}${NBSP}min</span>`;
-  return '<span class="tag ok">Včas</span>';
+/** Je spojení dnešní (živá data mají smysl)? */
+const isToday = (d) => dayDiff(pragueNow().day, d.day) === 0;
+/** Teď v sekundách od půlnoci dne spojení (spoj zítra: záporné). */
+const nowRel = (d) => { const n = pragueNow(); return n.sec - dayDiff(n.day, d.day) * 86400; };
+
+/** Živé vozy jízd spojení: index úseku → vůz (jen dnes; jinak by se párovaly se včerejšími / zítřejšími). */
+function liveByLeg(d) {
+  const out = new Map();
+  if (!isToday(d) || !S.live) return out;
+  d.legs.forEach((l, i) => {
+    if (l.kind === 'walk') return;
+    const v = S.live.forTrip(l.tid);
+    if (v && v.state !== 255) out.set(i, v);
+  });
+  return out;
+}
+const delaysOf = (live) => new Map([...live].map(([i, v]) => [i, v.delay || 0]));
+
+const MODE_OF_TRIP = (t) => tripStyle(t).ic;
+const KIND_LABEL = { bus: 'Bus', tram: 'Tramvaj', metro: 'Metro', train: 'Vlak' };
+
+function delayTag(delay, { live = true } = {}) {
+  if (delay == null) return '';
+  const cls = delay > CONFIG.LATE_MIN ? ' late' : delay >= 1 ? ' warn' : ' ok';
+  const txt = delay >= 1 ? `Zpoždění ${delay}${NBSP}min` : delay < 0 ? `Napřed ${-delay}${NBSP}min` : 'Včas';
+  return `<span class="tag nowrap${cls}">${live ? icon('live') : ''}${live && delay < 1 && delay >= 0 ? 'Živě · včas' : txt}</span>`;
 }
 
-function timelineHtml(d) {
-  const tt = S.tt;
-  const pts = [];
-  const push = (p) => {
-    const last = pts[pts.length - 1];
-    if (last && last.stop === p.stop && !last.walk && !p.walk && last.dep == null) { last.dep = p.dep; last.info = p.info ?? last.info; last.mid = p.mid; }
-    else pts.push(p);
-  };
-  for (const l of d.legs) {
-    if (l.kind === 'walk') {
-      const m = Math.max(1, Math.ceil((l.arr - l.dep) / 60));
-      pts.push({ walk: true, text: `Pěšky ${m}${NBSP}min` });
-      continue;
-    }
-    const t = tt.trips[l.tid];
-    const info = `${badgeHtml(t.line, t.isTrain)} směr ${esc(prettyName(t.head))}`;
-    const first = l.stops[0], lastS = l.stops[l.stops.length - 1];
-    push({ stop: first.stop, arr: null, dep: first.dep, info, boarding: true });
-    const mids = l.stops.slice(1, -1);
-    if (mids.length) pts.push({ mids, stop: -1 });
-    push({ stop: lastS.stop, arr: lastS.arr, dep: null });
-  }
-  return `<ol class="timeline">${pts.map((p) => {
-    if (p.walk) return `<li class="leg">${icon('walk')} ${p.text}</li>`;
-    if (p.mids) {
-      return `<li class="mid"><details><summary>${pluralStops(p.mids.length)} mezi</summary><ul>${p.mids.map((m) => `<li><span class="t">${hhmm(m.dep)}</span>${esc(stopLabel(prettyName(tt.stops[m.stop].name)))}</li>`).join('')}</ul></details></li>`;
-    }
-    const name = prettyName(tt.stops[p.stop].name);
-    const time = p.arr != null && p.dep != null ? `${hhmm(p.arr)} → ${hhmm(p.dep)}` : hhmm(p.arr ?? p.dep);
-    return `<li><span class="t">${time}</span><strong>${esc(stopLabel(name))}</strong> <span class="sj-city" style="color:var(--muted);font-size:.85rem">${esc(splitStopName(name).city)}</span>${p.info ? `<div class="leg">${p.info}</div>` : ''}</li>`;
-  }).join('')}</ol>`;
+/** Přestup "A → B": šipka jako ikona (textová šipka v různých písmech vypadá špatně). */
+const atHtml = (at) => esc(at).replace(' → ', ` ${icon('arrow-right', 'inline')} `);
+
+function riskChip(s) {
+  if (!s || s.risk === 'none') return '';
+  return s.risk === 'risk'
+    ? `<span class="tag late nowrap">${icon('alert')}Přestup ohrožen · zpoždění ${s.delayMin}${NBSP}min</span>`
+    : `<span class="tag warn nowrap">${icon('alert')}Těsný přestup · rezerva ${Math.max(0, s.marginMin)}${NBSP}min</span>`;
 }
 
 function journeyHtml(j, i) {
   const d = descOf(j);
-  const open = S.expanded.has(j.key);
   const dl = dayLabel(d);
-  const trans = d.transferList.map((t) => `<div class="transfer">Přestup: <strong>${esc(t.at)}</strong> · čekání ${t.waitMin}${NBSP}min${t.walkMin ? ` · pěšky ${t.walkMin}${NBSP}min` : ''}</div>`).join('');
-  const lines = d.rides.map((r) => badgeHtml(S.tt.trips[r.tid].line, S.tt.trips[r.tid].isTrain)).join('<span class="sep">+</span>');
+  const live = liveByLeg(d);
+  const delays = delaysOf(live);
+  const now = nowRel(d);
+  const rides = rideIndices(d.legs);
+  // linky: ťuknutí = detail té jízdy
+  const lines = rides.map((li) => {
+    const t = S.tt.trips[d.legs[li].tid];
+    return `<button type="button" class="badge-btn" data-act="leg" data-leg="${li}" aria-label="Linka ${esc(t.line)}, podrobnosti jízdy">${badgeHtml(t.line, t.isTrain)}</button>`;
+  }).join(`<span class="sep">${icon('arrow-right')}</span>`);
+  const firstDelay = live.get(rides[0])?.delay;
+  // přestupy zůstávají; směr, dopravce a počet zastávek jsou v detailu, "přímý spoj" je zřejmý z jedné linky
+  const trans = d.transferList.map((tr, k) => {
+    const st = transferStatus(d.legs, k, delays, now);
+    return `<div class="transfer">Přestup: <strong>${atHtml(tr.at)}</strong> · čekání ${tr.waitMin}${NBSP}min${tr.walkMin ? ` · pěšky ${tr.walkMin}${NBSP}min` : ''}${riskChip(st) ? `<div class="risk">${riskChip(st)}</div>` : ''}</div>`;
+  }).join('');
   return `<li class="journey" data-i="${i}" data-key="${esc(j.key)}">
     <div class="j-top">
-      <div>
+      <div class="j-main">
         <div class="j-times">${hhmm(d.dep)} ${icon('arrow-right')} ${hhmm(d.arr)}</div>
-        <div class="j-rel">${esc(dl ? `${dl} · ` : '')}${esc(relative(d))}</div>
+        <div class="j-rel"><span>${esc(dl ? `${dl} · ` : '')}${esc(relative(d))}</span>${firstDelay != null && firstDelay >= 1 ? delayTag(firstDelay, { live: false }) : ''}</div>
         <div class="j-dur">${fmtMinutes(d.durationMin)} ${d.transfers ? 'celkem' : 'jízdy'}</div>
       </div>
-      <div class="j-actions"><button type="button" class="pill-btn" data-act="map">${icon('map')}Mapa</button></div>
+      <div class="j-actions">
+        <button type="button" class="plain-icon" data-act="detail" aria-label="Zastávky a podrobnosti" title="Zastávky a podrobnosti">${icon('info')}</button>
+        <button type="button" class="pill-btn" data-act="map">${icon('map')}Mapa</button>
+      </div>
     </div>
-    <div class="j-lines">${d.boardWalkMin ? `<span class="tag">${icon('walk')} pěšky ${d.boardWalkMin}${NBSP}min</span>` : ''}${lines}${delayTag(d)}</div>
-    <div class="j-meta">${pluralStops(d.stopsCount)} · ${pluralTransfers(d.transfers)}</div>
+    <div class="j-lines">${d.boardWalkMin ? `<span class="tag">${icon('walk')} pěšky ${d.boardWalkMin}${NBSP}min</span>` : ''}${lines}</div>
     ${trans}
-    <div class="j-sub">Směr ${esc(d.destination)}</div>
-    <div class="j-sub">${esc(d.agency)}</div>
-    <button type="button" class="toggle" data-act="toggle" aria-expanded="${open}">Podrobnosti ${icon('chevron')}</button>
-    ${open ? `<div class="tl-wrap">${timelineHtml(d)}</div>` : ''}
   </li>`;
 }
 
 function renderResults(fresh = false) {
   const res = $('#results'), empty = $('#empty');
   if (!S.query) { res.hidden = true; empty.hidden = true; return; }
+  const q = S.query;
+  $('#res-title').innerHTML = `${esc(stopLabel(prettyName(q.from)))} ${icon('arrow-right', 'inline')} ${esc(stopLabel(prettyName(q.to)))}`;
+  $('#res-sub').textContent = `${q.label}${S.journeys.length ? ` · ${S.journeys.length} nalezeno` : ''}`;
+  $('#earlier').disabled = S.noMoreEarlier;
   if (!S.journeys.length) {
     res.hidden = true; empty.hidden = false;
-    const q = S.query;
-    empty.innerHTML = `<strong>Spojení jsme nenašli</strong>${q.mode && q.mode.size ? 'Zkus zvolit všechny druhy dopravy, nebo ' : 'Zkus '}posunout čas odjezdu${q.start.sec > 3600 * 20 ? ' (nebo vybrat zítřejší den)' : ''}.`;
+    empty.innerHTML = q.arrive
+      ? '<strong>Do zvoleného času žádné spojení nepřijede</strong>Zkus pozdější čas příjezdu.'
+      : `<strong>Spojení jsme nenašli</strong>${q.mode && q.mode.size ? 'Zkus zvolit všechny druhy dopravy, nebo ' : 'Zkus '}posunout čas odjezdu${q.start.sec > 3600 * 20 ? ' (nebo vybrat zítřejší den)' : ''}.`;
     return;
   }
   empty.hidden = true; res.hidden = false;
@@ -622,39 +738,361 @@ function renderResults(fresh = false) {
     list.classList.toggle('fresh', fresh);
     list.innerHTML = html;
   }
-  $('#count').textContent = `${S.journeys.length} nalezeno`;
-  $('#earlier').disabled = S.noMoreEarlier;
-  if (fresh) { $('#more').hidden = false; $('#later').textContent = 'Zobrazit další spoje'; }
+  if (fresh) { $('#more').hidden = !!q.arrive; $('#later').textContent = 'Zobrazit další spoje'; }
 }
 
 $('#journeys').addEventListener('click', (e) => {
+  const li = e.target.closest('.journey');
+  if (!li) return;
+  const d = descOf(S.journeys[+li.dataset.i]);
   const btn = e.target.closest('[data-act]');
-  if (!btn) return;
-  const li = btn.closest('.journey');
-  const j = S.journeys[+li.dataset.i];
-  if (btn.dataset.act === 'toggle') {
-    // podrobnosti se rozbalí / sbalí výškovou animací, karta se nepřekresluje celá
-    const k = j.key, open = !S.expanded.has(k);
-    if (open) S.expanded.add(k); else S.expanded.delete(k);
-    btn.setAttribute('aria-expanded', String(open));
-    const old = li.querySelector('.tl-wrap');
-    if (open && !old) {
-      const wrap = document.createElement('div');
-      wrap.className = 'tl-wrap';
-      wrap.innerHTML = timelineHtml(descOf(j));
-      li.append(wrap);
-      if (!reduceMotion()) wrap.animate([{ height: '0px', opacity: 0 }, { height: `${wrap.scrollHeight}px`, opacity: 1 }], { duration: 280, easing: EASE_OUT });
-    } else if (!open && old) {
-      if (reduceMotion()) old.remove();
-      else old.animate([{ height: `${old.scrollHeight}px`, opacity: 1 }, { height: '0px', opacity: 0 }], { duration: 200, easing: EASE_IN, fill: 'forwards' }).finished.then(() => old.remove()).catch(() => old.remove());
+  const act = btn?.dataset.act || 'detail';   // ťuknutí kamkoliv na kartu = detail spojení
+  if (btn) btn.animate([{ transform: 'scale(.92)' }, { transform: 'none' }], { duration: 220, easing: EASE_OUT });
+  if (act === 'map') showJourneyOnMapSmart(d);
+  else if (act === 'leg') openLeg(d, +btn.dataset.leg);
+  else openDetail(d);
+});
+
+// ───────────── detail spojení ─────────────
+/** Zastávka jízdy: název (vlak celý, jinak bez obce), obec, čas; projetá ztlumená, se zpožděním i očekávaný čas. */
+function stopRowHtml(stopId, time, { terminal, passed, delaySec, train, color }) {
+  const name = prettyName(S.tt.stops[stopId].name);
+  const { stop, city } = splitStopName(name);
+  const shown = train ? name : stop || name;
+  const delayed = delaySec && !passed;
+  const timeHtml = delayed
+    ? `<s>${hhmm(time)}</s><b class="${delaySec > 180 ? 'late' : 'warn'}">${hhmm(time + delaySec)}</b>`
+    : `<span>${hhmm(time)}</span>`;
+  const a11y = delayed ? `${shown}, podle jízdního řádu ${hhmm(time)}, očekávaně ${hhmm(time + delaySec)}` : `${shown}, ${hhmm(time)}`;
+  return `<li class="tl-stop${terminal ? ' term' : ''}${passed ? ' passed' : ''}" style="--c:${color}" aria-label="${esc(a11y)}${passed ? ', projeto' : ''}">
+    <span class="tl-time" aria-hidden="true">${timeHtml}</span><span class="tl-name" aria-hidden="true">${esc(shown)}${terminal && !train && city ? `<small>${esc(city)}</small>` : ''}</span></li>`;
+}
+
+function rideCardHtml(d, li, v, now) {
+  const l = d.legs[li], t = S.tt.trips[l.tid];
+  const { st, ic } = tripStyle(t);
+  const color = routeOf(st);
+  const delaySec = (v?.delay || 0) * 60;
+  const passed = (x) => now > x + delaySec;
+  const first = l.stops[0], last = l.stops[l.stops.length - 1], mids = l.stops.slice(1, -1);
+  const rideMin = Math.round((last.arr - first.dep) / 60);
+  const train = !!t.isTrain;
+  const open = !S.collapsed.has(li);
+  const chips = [
+    v ? delayTag(v.delay || 0) : '',
+    v?.id ? `<span class="tag soft">Vůz ${esc(v.id)}</span>` : '',
+    t.wheel > 0 || v?.low ? `<span class="tag soft">${icon('access')}Bezbariérový</span>` : '',
+    v?.ac ? `<span class="tag soft">${icon('snow')}Klimatizace</span>` : '',
+  ].join('');
+  const sub = [train && t.num ? `Vlak č. ${esc(t.num)}` : '', esc(t.agency || '')].filter(Boolean).join(' · ');
+  return `<article class="ride card">
+    <header class="ride-head">
+      <button type="button" class="badge-btn" data-act="leg" data-leg="${li}" aria-label="${KIND_LABEL[ic] || 'Linka'} ${esc(t.line)}, podrobnosti jízdy">${depBadgeHtml(t, true)}</button>
+      <div><strong>Směr ${esc(train ? prettyName(t.head) : stopLabel(prettyName(t.head)))}</strong>${sub ? `<small>${sub}</small>` : ''}</div>
+    </header>
+    ${chips ? `<div class="chips">${chips}</div>` : ''}
+    <ol class="tl">
+      ${stopRowHtml(first.stop, first.dep, { terminal: true, passed: passed(first.dep), delaySec, train, color })}
+      ${mids.length ? `<li class="tl-toggle" style="--c:${color}"><button type="button" data-act="mids" data-leg="${li}" aria-expanded="${open}">${pluralStops(mids.length).replace(/zastáv/, 'mezizastáv')} · ${rideMin}${NBSP}min ${icon('chevron')}</button></li>` : ''}
+      ${open ? mids.map((m) => stopRowHtml(m.stop, m.arr ?? m.dep, { passed: passed(m.dep ?? m.arr), delaySec, train, color })).join('') : ''}
+      ${stopRowHtml(last.stop, last.arr, { terminal: true, passed: passed(last.arr), delaySec, train, color })}
+    </ol>
+  </article>`;
+}
+
+function detailHtml(d) {
+  const live = liveByLeg(d);
+  const delays = delaysOf(live);
+  const now = nowRel(d);
+  const rides = rideIndices(d.legs);
+  const dl = dayLabel(d);
+  const worst = live.size ? Math.max(...[...live.values()].map((v) => v.delay || 0)) : null;
+  const badges = rides.map((li) => {
+    const t = S.tt.trips[d.legs[li].tid];
+    return `<button type="button" class="badge-btn" data-act="leg" data-leg="${li}" aria-label="${KIND_LABEL[tripStyle(t).ic] || 'Linka'} ${esc(t.line)}, podrobnosti jízdy">${depBadgeHtml(t)}</button>`;
+  }).join(`<span class="sep">${icon('arrow-right')}</span>`);
+  const parts = [`<section class="card det-sum">
+    <div class="j-times big">${hhmm(d.dep)} ${icon('arrow-right')} ${hhmm(d.arr)}</div>
+    <div class="j-rel"><span>${esc(dl ? `${dl} · ` : '')}${esc(relative(d))}</span></div>
+    <div class="j-dur">${fmtMinutes(d.durationMin)} jízdy · ${pluralStops(d.stopsCount)} · ${d.transfers ? pluralTransfers(d.transfers) : 'bez přestupu'}</div>
+    <div class="j-lines">${badges}</div>
+    ${worst != null ? `<div class="chips">${delayTag(worst)}</div>` : ''}
+    <button type="button" class="btn btn-primary wide" data-act="map">${icon('map')}Zobrazit na mapě</button>
+  </section>`];
+  let k = 0;
+  d.legs.forEach((l, li) => {
+    if (l.kind === 'walk') {
+      const m = Math.max(1, Math.ceil((l.arr - l.dep) / 60));
+      const a = S.tt.stops[l.from], b = S.tt.stops[l.to];
+      const dist = a?.hasCoords && b?.hasCoords ? ` · ${fmtDist(distanceM(a.lat, a.lng, b.lat, b.lng))}` : '';
+      parts.push(`<div class="walk-row"><span class="walk-ico">${icon('walk')}</span><span><strong>${m}${NBSP}min pěšky${dist}</strong><small>na zastávku ${esc(stopLabel(prettyName(b?.name || '')))}</small></span></div>`);
+      return;
     }
-    // seznam se při příštím obnovení nepřekreslí, pokud se nic jiného nezměnilo
-    S.lastHtml = S.journeys.map(journeyHtml).join('');
-  } else if (btn.dataset.act === 'map') {
-    btn.animate([{ transform: 'scale(.92)' }, { transform: 'none' }], { duration: 220, easing: EASE_OUT });
-    showJourneyOnMap(descOf(j));
+    if (k > 0) {
+      const tr = d.transferList[k - 1];
+      const st = transferStatus(d.legs, k - 1, delays, now);
+      parts.push(`<div class="transfer-row"><span class="tag">${icon('swap')}Přestup · čekání ${tr.waitMin}${NBSP}min</span>${riskChip(st)}</div>`);
+    }
+    parts.push(rideCardHtml(d, li, live.get(li), now));
+    k++;
+  });
+  return parts.join('');
+}
+
+function openDetail(d) {
+  S.detail = d;
+  S.collapsed.clear();
+  renderDetail();
+  $('#det-scroll').scrollTop = 0;
+  navPush('detail');
+}
+
+function renderDetail() {
+  const d = S.detail;
+  if (!d) return;
+  const first = S.tt.stops[d.rides[0].from], last = S.tt.stops[d.rides[d.rides.length - 1].to];
+  $('#det-sub').innerHTML = `${esc(stopLabel(prettyName(first.name)))} ${icon('arrow-right', 'inline')} ${esc(stopLabel(prettyName(last.name)))}`;
+  const sc = $('#det-scroll'), top = sc.scrollTop;
+  const html = detailHtml(d);
+  if (html !== S.detailHtml) { S.detailHtml = html; sc.innerHTML = html; sc.scrollTop = top; }
+}
+
+$('#det-scroll').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-act]');
+  if (!btn || !S.detail) return;
+  const act = btn.dataset.act;
+  if (act === 'map') showJourneyOnMapSmart(S.detail);
+  else if (act === 'leg') openLeg(S.detail, +btn.dataset.leg);
+  else if (act === 'mids') {
+    const li = +btn.dataset.leg;
+    if (S.collapsed.has(li)) S.collapsed.delete(li); else S.collapsed.add(li);
+    renderDetail();
   }
 });
+
+// ───────────── detail jedné jízdy (ťuknutí na číslo linky) ─────────────
+function openLeg(d, li) {
+  const l = d.legs[li], t = S.tt.trips[l.tid];
+  const rides = rideIndices(d.legs);
+  const v = liveByLeg(d).get(li);
+  const { st, ic } = tripStyle(t);
+  const train = !!t.isTrain;
+  const first = l.stops[0], last = l.stops[l.stops.length - 1];
+  const delaySec = (v?.delay || 0) * 60, now = nowRel(d);
+  const chips = [
+    v ? delayTag(v.delay || 0) : '',
+    v?.id ? `<span class="tag soft">Vůz ${esc(v.id)}</span>` : '',
+    t.wheel > 0 || v?.low ? `<span class="tag soft">${icon('access')}Bezbariérový</span>` : '',
+    v?.ac ? `<span class="tag soft">${icon('snow')}Klimatizace</span>` : '',
+  ].join('');
+  const sub = [train && t.num ? `Vlak č. ${esc(t.num)}` : '', esc(t.agency || '')].filter(Boolean).join(' · ');
+  const color = routeOf(st);
+  $('#leg-body').innerHTML = `
+    <p class="leg-kicker" id="leg-title">${rides.length > 1 ? `${rides.indexOf(li) + 1}. spoj z ${rides.length}` : 'Informace o spoji'}</p>
+    <div class="ride-head">${depBadgeHtml(t, true)}<div><strong>Směr ${esc(train ? prettyName(t.head) : stopLabel(prettyName(t.head)))}</strong>${sub ? `<small>${sub}</small>` : ''}</div></div>
+    ${chips ? `<div class="chips">${chips}</div>` : ''}
+    <ol class="tl compact">
+      ${stopRowHtml(first.stop, first.dep, { terminal: true, passed: now > first.dep + delaySec, delaySec, train, color })}
+      <li class="tl-toggle" style="--c:${color}"><span>${pluralStops(Math.max(0, l.stops.length - 2)).replace(/zastáv/, 'mezizastáv')} · ${Math.round((last.arr - first.dep) / 60)}${NBSP}min</span></li>
+      ${stopRowHtml(last.stop, last.arr, { terminal: true, passed: now > last.arr + delaySec, delaySec, train, color })}
+    </ol>
+    <button type="button" class="btn btn-primary wide" id="leg-map">${icon('map')}${rides.length > 1 ? `Zobrazit linku ${esc(t.line)} na mapě` : 'Zobrazit na mapě'}</button>`;
+  $('#leg-map').onclick = () => { animateDialogClose($('#leg-dlg')); showLegOnMap(d, li); };
+  showDialog($('#leg-dlg'));
+}
+
+// ───────────── mapa u spojení: aktuální jízda ─────────────
+/** Jízda li spojení na mapě; první jízda = celé spojení (s chůzí k zastávce). */
+function showLegOnMap(d, li) {
+  const rides = rideIndices(d.legs);
+  if (li === rides[0]) return showJourneyOnMap(d);
+  const l = d.legs[li];
+  showJourneyOnMap(describeJourney(S.tt, { ...d, key: `${d.key}#${li}`, legs: [l], dep: l.dep, arr: l.arr }));
+}
+
+/** Tlačítka Mapa u spojení: ukáže jízdu, která je právě aktuální (po odjezdu první před 3 min + zpoždění už další). */
+function showJourneyOnMapSmart(d) {
+  const delays = delaysOf(liveByLeg(d));
+  showLegOnMap(d, activeLegIndex(d.legs, nowRel(d), (i) => delays.get(i) || 0));
+}
+
+// ───────────── oblíbená a nedávná spojení ─────────────
+function tripRowHtml(x, pinned) {
+  const from = stopLabel(prettyName(x.from)), to = stopLabel(prettyName(x.to));
+  return `<li class="trip-row" data-from="${esc(x.from)}" data-to="${esc(x.to)}" data-pin="${pinned ? 1 : 0}">
+    <div class="trip-bg" aria-hidden="true">${icon('trash')}</div>
+    <div class="trip-fg">
+      <button type="button" class="trip-main" data-act="go" aria-label="Hledat ${esc(from)} – ${esc(to)}">
+        <span class="trip-ico">${icon(pinned ? 'star-fill' : 'history')}</span>
+        <span class="trip-txt"><strong>${esc(from)}</strong><small>${icon('arrow-right', 'inline')}${esc(to)}</small></span>
+      </button>
+      <button type="button" class="mini" data-act="rev" aria-label="Hledat opačným směrem" title="Opačný směr">${icon('swap')}</button>
+      <button type="button" class="mini" data-act="pin" aria-label="${pinned ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}" title="${pinned ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}">${icon(pinned ? 'star-fill' : 'star')}</button>
+      <button type="button" class="mini del" data-act="del" aria-label="Odebrat z historie" title="Odebrat z historie">${icon('x')}</button>
+    </div>
+  </li>`;
+}
+
+function renderTrips() {
+  const ok = (x) => S.tt?.places.has(x.from) && S.tt.places.has(x.to);
+  const fav = store.pinnedTrips().filter(ok), rec = store.recentTrips(15).filter(ok);
+  const sec = (title, list, pinned) => (list.length
+    ? `<h2 class="sec-title">${title}</h2><ul class="trip-list">${list.map((x) => tripRowHtml(x, pinned)).join('')}</ul>` : '');
+  $('#trips').innerHTML = sec('Oblíbená spojení', fav, true) + sec('Nedávná hledání', rec, false);
+}
+
+function searchTrip(from, to) {
+  if (!S.tt.places.has(from) || !S.tt.places.has(to)) return toast('Zastávka z historie už v jízdním řádu není.');
+  $('[data-field="from"]').setValue(from); $('[data-field="to"]').setValue(to);
+  runSearch();
+}
+
+/** Odebrání (křížek nebo přejetí): hned zmizí, dole jde vrátit "Zpět". */
+function removeTrip(from, to) {
+  const removed = store.removeTrip(from, to);
+  if (!removed) return;
+  renderTrips();
+  snack(`Odebráno: ${stopLabel(prettyName(from))} – ${stopLabel(prettyName(to))}`, 'Zpět', () => { store.restoreTrip(removed); renderTrips(); });
+}
+
+$('#trips').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-act]'), row = e.target.closest('.trip-row');
+  if (!btn || !row || row._swiped) return;
+  const { from, to } = row.dataset, pinned = row.dataset.pin === '1';
+  const act = btn.dataset.act;
+  if (act === 'go') searchTrip(from, to);
+  else if (act === 'rev') searchTrip(to, from);
+  else if (act === 'pin') { store.setPinned(from, to, !pinned); renderTrips(); }
+  else if (act === 'del') removeTrip(from, to);
+});
+
+// přejetí řádku do strany = odebrat; až po přetažení přes polovinu šířky (ne omylem při posouvání seznamu)
+(function setupTripSwipe() {
+  const root = $('#trips');
+  let row = null, fg = null, x0 = 0, y0 = 0, dx = 0, dragging = false;
+  root.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return;   // myší je křížek
+    row = e.target.closest('.trip-row'); if (!row) return;
+    fg = row.querySelector('.trip-fg'); x0 = e.clientX; y0 = e.clientY; dx = 0; dragging = false; row._swiped = false;
+  });
+  root.addEventListener('pointermove', (e) => {
+    if (!row) return;
+    const ddx = e.clientX - x0, ddy = e.clientY - y0;
+    if (!dragging) {
+      if (Math.abs(ddx) > 10 && Math.abs(ddx) > Math.abs(ddy) * 1.5) { dragging = true; row.classList.add('swiping'); try { root.setPointerCapture(e.pointerId); } catch { /* ignore */ } }
+      else if (Math.abs(ddy) > 10) { row = null; return; } else return;
+    }
+    dx = ddx;
+    fg.style.transform = `translateX(${dx}px)`;
+    row.classList.toggle('armed', Math.abs(dx) > row.offsetWidth * 0.5);
+  });
+  const end = () => {
+    if (!row) return;
+    const r = row, f = fg;
+    row = null;
+    if (!dragging) return;
+    r._swiped = true; setTimeout(() => { r._swiped = false; }, 60);
+    r.classList.remove('swiping', 'armed');
+    if (Math.abs(dx) > r.offsetWidth * 0.5) {
+      f.animate([{ transform: `translateX(${dx}px)` }, { transform: `translateX(${Math.sign(dx) * r.offsetWidth}px)` }], { duration: reduceMotion() ? 0 : 160, easing: EASE_IN, fill: 'forwards' })
+        .finished.then(() => removeTrip(r.dataset.from, r.dataset.to)).catch(() => {});
+    } else {
+      f.animate([{ transform: `translateX(${dx}px)` }, { transform: 'none' }], { duration: reduceMotion() ? 0 : 200, easing: EASE_OUT });
+      f.style.transform = '';
+    }
+  };
+  root.addEventListener('pointerup', end);
+  root.addEventListener('pointercancel', end);
+})();
+
+/** Oznámení s akcí ("Odebráno · Zpět"); samo zmizí. */
+let snackTimer;
+function snack(text, action, onAction, ms = 6000) {
+  const el = $('#snack');
+  el.querySelector('span').textContent = text;
+  const b = el.querySelector('button');
+  b.textContent = action;
+  b.onclick = () => { clearTimeout(snackTimer); hideEl(el, { y: 12 }); onAction(); };
+  showEl(el);
+  clearTimeout(snackTimer);
+  snackTimer = setTimeout(() => hideEl(el, { y: 12 }), ms);
+}
+
+// ───────────── odjezdy z nejbližší zastávky (hlavní obrazovka) ─────────────
+/** Nejbližší zastávka pěšky (jako "Moje poloha") a její nejbližší odjezdy ze všech nástupišť. */
+async function refreshNearby({ relocate = false } = {}) {
+  if (!S.loc || !S.stopIdx) return;
+  let nb = S.nearby;
+  if (!nb || relocate || nb.loc !== S.loc) {
+    const cands = nearestPlaces(S.index, S.loc.lat, S.loc.lng, 6).filter((c) => c.dist <= 1500);
+    if (!cands.length) { S.nearby = null; renderNearby(); return; }
+    const walk = await footDistances([S.loc.lat, S.loc.lng], cands.map((c) => [c.lat, c.lng]));
+    // pěšky (zastávka za řekou bývá vzdušnou čarou blízko, ale cesta dlouhá); bez pěší trasy vzdušnou čarou
+    let best = cands[0], distM = cands[0].dist;
+    if (walk?.some((w) => w != null)) {
+      distM = Infinity;
+      cands.forEach((c, i) => { if (walk[i] != null && walk[i] < distM) { distM = walk[i]; best = c; } });
+    }
+    if (distM > 900) { S.nearby = null; renderNearby(); return; }
+    const ids = new Set(S.tt.places.get(best.place) || []);
+    const platforms = S.stopIdx.stops.filter((p) => p.ttStops.some((id) => ids.has(id)));
+    nb = { loc: S.loc, place: best.place, distM, platforms };
+  }
+  const now = pragueNow(), seen = new Set();
+  nb.deps = nb.platforms.flatMap((p) => S.stopIdx.departures(p, now, 2).map((d) => ({ ...d, platform: p })))
+    .filter((d) => { const k = `${d.tid}|${d.dep}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => a.dep - b.dep).slice(0, 4);
+  S.nearby = nb;
+  renderNearby();
+}
+
+function renderNearby() {
+  const el = $('#nearby'), nb = S.nearby;
+  if (!nb) { el.hidden = true; return; }
+  const now = pragueNow();
+  const rows = nb.deps.map((d, i) => {
+    const min = Math.round((d.dep - now.sec) / 60);
+    return `<li><button type="button" class="dep-row" data-i="${i}">${depBadgeHtml(S.tt.trips[d.tid])}<span class="dep-head">směr ${esc(d.isTrain ? d.head : stopLabel(d.head))}</span><span class="dep-time"><strong>${hhmm(d.dep % 86400)}</strong><small>${min <= 0 ? 'teď' : `za ${min}${NBSP}min`}</small></span></button></li>`;
+  }).join('');
+  el.innerHTML = `<header class="nearby-head">${icon('pin')}<div><small id="nearby-title">Odjezdy z nejbližší zastávky · ${esc(fmtDist(nb.distM))}</small><strong>${esc(stopLabel(prettyName(nb.place)))}</strong></div>
+      <button type="button" class="link-btn" data-act="stop">Na mapě</button></header>
+    ${rows ? `<ol class="stop-deps">${rows}</ol>` : '<p class="age">V příštích 2 hodinách odsud nic nejede.</p>'}`;
+  el.hidden = false;
+}
+
+$('#nearby').addEventListener('click', (e) => {
+  const nb = S.nearby;
+  if (!nb) return;
+  if (e.target.closest('[data-act="stop"]')) {
+    // panel zastávky + mapa na zastávce (v pruhu mezi kartou nahoře a panelem)
+    const p = nb.platforms[0];
+    if (!p) return;
+    goMap();
+    openStop(p);
+    // až je panel vykreslený (jeho výška rozhoduje, kam zastávku posunout)
+    requestAnimationFrame(() => requestAnimationFrame(() => S.map.setView([p.lat, p.lng], 17, { animate: true, offset: [0, -stopSheetShift()] })));
+    return;
+  }
+  const row = e.target.closest('.dep-row');
+  if (row) showDeparture(nb.deps[+row.dataset.i]);
+});
+
+/** O kolik px nad střed mapy dát zastávku, aby byla v pruhu mezi stavovou kartou a panelem odjezdů dole. */
+function stopSheetShift() {
+  const h = $('#mapwrap').clientHeight;
+  if (matchMedia('(min-width: 960px)').matches) return 0;   // široký displej: panel je vlevo, střed zůstává volný
+  // skutečný horní okraj panelu (offsetTop nebere animaci vyjetí v potaz), jinak odhad
+  const sh = $('#sheet');
+  const sheetTop = !sh.hidden && sh.offsetHeight ? sh.offsetTop : h * 0.4;
+  return Math.max(0, h / 2 - (bannerBottom() + sheetTop) / 2);
+}
+
+/** Spodní okraj stavové karty "Mapa vozidel" nahoře (px v mapě): co je pod ní, není vidět. */
+function bannerBottom() {
+  const s = $('#status'), w = $('#mapwrap');
+  if (!s || s.hidden) return 0;
+  return Math.max(0, s.getBoundingClientRect().bottom - w.getBoundingClientRect().top);
+}
 
 // ───────────── trasy na mapě ─────────────
 let overlayGen = 0; // zahodí pozdě doražené trasy, když mezitím došlo ke změně na mapě
@@ -672,9 +1110,10 @@ function showRouteControls() {
   showEl($('#clear-route-icon'));
 }
 
-function dot(lat, lng, cls, label) {
+function dot(lat, lng, cls, label, color = null) {
   const el = document.createElement('div');
   el.className = cls;
+  if (color) el.style.borderColor = color;   // zastávky na trase v barvě druhu dopravy
   const m = S.map.addMarker({ lat, lng, el, z: 5 });
   S.overlay.markers.push(m);
   if (label) {
@@ -695,6 +1134,7 @@ function pin(lat, lng, to, label) {
 function showJourneyOnMap(d) {
   clearOverlay(); closeSheet();
   const tt = S.tt;
+  const allPts = [];
   const sp = (id) => tt.stops[id];
   d.legs.forEach((l) => {
     if (l.kind === 'walk') {
@@ -719,19 +1159,20 @@ function showJourneyOnMap(d) {
     legRoute(S.shapes, tt, l.tid, l.stops.map((x) => x.stop))
       .then((r) => r || (t.isTrain ? null : osrmRoute(line)))
       .then((r) => { if (r && gen === overlayGen) pl.setPoints(r); });
-    lp.slice(1, -1).forEach((p) => { if (p) dot(p.lat, p.lng, 'stopdot mid'); });
+    lp.slice(1, -1).forEach((p) => { if (p) dot(p.lat, p.lng, 'stopdot mid', null, routeColor(t)); });
+    allPts.push(...line);
   });
   // přestupy, začátek a konec (na nástupišti své jízdy)
   const rideLegs = d.legs.filter((l) => l.kind !== 'walk');
   const at = (l, idx) => legPoints(l).at(idx);
-  rideLegs.slice(0, -1).forEach((l) => { const p = at(l, -1), s = sp(l.stops.at(-1).stop); if (p) dot(p.lat, p.lng, 'stopdot', stopLabel(prettyName(s.name))); });
+  rideLegs.slice(0, -1).forEach((l) => { const p = at(l, -1), s = sp(l.stops.at(-1).stop); if (p) dot(p.lat, p.lng, 'stopdot', stopLabel(prettyName(s.name)), routeColor(tt.trips[l.tid])); });
   const first = sp(d.rides[0].from), last = sp(d.rides[d.rides.length - 1].to);
   const fp = rideLegs.length ? at(rideLegs[0], 0) : null, lpEnd = rideLegs.length ? at(rideLegs.at(-1), -1) : null;
   if (fp) pin(fp.lat, fp.lng, false, stopLabel(prettyName(first.name)));
   if (lpEnd) pin(lpEnd.lat, lpEnd.lng, true, stopLabel(prettyName(last.name)));
   showRouteControls();
-  setTab('map');
-  focusLive(d);
+  goMap();
+  focusLive(d, allPts);
 }
 
 /** Polohy zastávek jízdy na nástupištích (pole zarovnané s l.stops, null = bez souřadnic). */
@@ -741,18 +1182,35 @@ function legPoints(l) {
   return ids.map((id) => { const s = S.tt.stops[id]; return s.hasCoords ? { id, lat: s.lat, lng: s.lng } : null; });
 }
 
-/** Jede-li spoj (první jízda d) právě živě, zvýrazní se a přiblíží se na něj (jako v aplikaci). */
-function focusLive(d) {
+/**
+ * Jede-li spoj (první jízda d) právě živě, zvýrazní se. Vůz na trase => přiblížení na něj; vůz k trase teprve
+ * přijíždí (spoj nevyjel) => výřez s trasou i vozem; bez vozu celá trasa. Vše pod stavovou kartou nahoře.
+ */
+const VEHICLE_ON_ROUTE_M = 350;
+function focusLive(d, routePts = []) {
   // vůz spoje stejně jako v appce: spárovaný se spojem (i DPMÚL podle polohy), jinak nejbližší vůz linky před nástupem
   const live = S.live.vehicleForJourney?.(d)?.v;
   const liveUid = live && S.vehicles.some((x) => vehicleUid(x) === vehicleUid(live)) ? vehicleUid(live) : null;
-  // dřív tlačítko „nic neudělalo“: když vůz spoje teď nevidíme, aspoň to řekneme
-  if (!liveUid) setTimeout(() => toast('Vůz tohoto spoje teď na mapě nevidíme, ukazuji jen trasu.'), 250);
-  if (liveUid) focusUid(liveUid);
+  if (!liveUid) {
+    // dřív tlačítko „nic neudělalo“: když vůz spoje teď nevidíme, aspoň to řekneme
+    setTimeout(() => toast('Vůz tohoto spoje teď na mapě nevidíme, ukazuji jen trasu.'), 250);
+    if (routePts.length >= 2) fitUnderBanner(routePts);
+    return;
+  }
+  const p = S.vlayer.position(liveUid) || live;
+  if (routePts.length >= 2 && distanceToRouteM(p.lat, p.lng, routePts) > VEHICLE_ON_ROUTE_M) {
+    fitUnderBanner([...routePts, [p.lat, p.lng]]);
+    focusUid(liveUid, { move: false });
+  } else focusUid(liveUid);
 }
 
-/** Zvýrazní vůz a přiblíží na něj (mobil: bliknutí, počítač: detail). */
-function focusUid(liveUid) {
+/** Výřez se všemi body ve viditelné části mapy (pod stavovou kartou nahoře). */
+function fitUnderBanner(points) {
+  requestAnimationFrame(() => S.map.fitBounds(points, { padding: { top: bannerBottom() + 32, bottom: 60 } }));
+}
+
+/** Zvýrazní vůz a přiblíží na něj (mobil: bliknutí, počítač: detail); move = false jen zvýrazní. */
+function focusUid(liveUid, { move = true } = {}) {
   {
     setTimeout(() => {
       const mobile = matchMedia('(max-width: 640px)').matches;
@@ -766,8 +1224,9 @@ function focusUid(liveUid) {
       }
       if (mobile) hideEl($('#sheet'), { y: 60 });
       else renderSheet();
-      const p = S.vlayer.position(liveUid);
-      if (p) S.map.setView([p.lat, p.lng], Math.max(S.map.zoom, mobile ? 16 : 15), { animate: true });
+      const p = move && S.vlayer.position(liveUid);
+      // vůz doprostřed viditelné části pod stavovou kartou (ne doprostřed celé mapy, kde by byl napůl schovaný)
+      if (p) S.map.setView([p.lat, p.lng], Math.max(S.map.zoom, mobile ? 16 : 15), { animate: true, offset: [0, bannerBottom() / 2] });
     }, 60);
   }
 }
@@ -793,12 +1252,13 @@ async function pollVehicles() {
     for (const [i, source] of sourceStatusParts(snap.sources).entries()) {
       if (i) sourceStatus.append(document.createTextNode(', '));
       const label = document.createElement('span');
-      label.textContent = `${source.name}${source.stale ? ' (zastaralé)' : ''}`;
+      label.textContent = source.name;   // zastaralý zdroj jen červeně, bez textu
       if (source.stale) label.className = 'source-stale';
       sourceStatus.append(label);
     }
     sourceStatus.hidden = false;
     if (S.journeys.length) renderResults();
+    if (S.detail) renderDetail();
     if (S.selected) renderSheet();
   } catch (e) {
     $('#status-sub').textContent = 'Polohy se nepodařilo načíst';
@@ -1049,13 +1509,13 @@ function showDeparture(dep) {
   real.forEach(([p, i], k) => {
     const name = prettyName(tt.stops[ids[i]].name);
     if (k === 0 || k === real.length - 1) pin(p.lat, p.lng, k === real.length - 1, stopLabel(name));
-    else dot(p.lat, p.lng, `stopdot${ids[i] === dep.from ? '' : ' mid'}`, ids[i] === dep.from ? stopLabel(name) : null);
+    else dot(p.lat, p.lng, `stopdot${ids[i] === dep.from ? '' : ' mid'}`, ids[i] === dep.from ? stopLabel(name) : null, routeColor(t));
   });
   showRouteControls();
-  setTab('map');
-  // celá trasa do záběru, pak případně přiblížení na vůz
-  S.map.fitBounds(line, { padding: { bottom: 60 } });
-  focusLive({ rides: [{ tid: dep.tid, from: dep.from, to: ids.at(-1), dep: dep.dep }], day: dep.day });
+  goMap();
+  // celá trasa do záběru (pod stavovou kartou), pak případně přiblížení na vůz
+  fitUnderBanner(line);
+  focusLive({ rides: [{ tid: dep.tid, from: dep.from, to: ids.at(-1), dep: dep.dep }], day: dep.day }, line);
 }
 
 /** Odjezd ze zastávky mimo kraj: spoj ze serveru (zastávky na nástupištích, tvar trasy) a jeho vůz na mapě. */
@@ -1079,11 +1539,11 @@ async function showRemoteDeparture(dep) {
   real.forEach(([p, i], k) => {
     const name = stopLabel(prettyName(trip.stops[i][0]));
     if (k === 0 || k === real.length - 1) pin(p[0], p[1], k === real.length - 1, name);
-    else dot(p[0], p[1], `stopdot${k === boardI ? '' : ' mid'}`, k === boardI ? name : null);
+    else dot(p[0], p[1], `stopdot${k === boardI ? '' : ' mid'}`, k === boardI ? name : null, routeColor(trip));
   });
   showRouteControls();
-  setTab('map');
-  S.map.fitBounds(line, { padding: { bottom: 60 } });
+  goMap();
+  fitUnderBanner(line);
   // vůz spoje: vlak podle čísla, jinak stejná linka nejblíž trase před nástupní zastávkou
   const board = boardI >= 0 ? real[boardI][0] : line[0];
   const routePts = trip.route && trip.route.length >= 2 ? trip.route : line;
@@ -1121,7 +1581,7 @@ function drawVehicleRoute(d) {
     const p = plat?.[i] || s;
     const isNext = i === d.nextIdx, isEnd = i === d.stops.length - 1;
     if (i === 0 || isEnd) pin(p.lat, p.lng, isEnd, stopLabel(s.name));
-    else dot(p.lat, p.lng, `stopdot${isNext ? ' next' : ' mid'}`, isNext ? stopLabel(s.name) : null);
+    else dot(p.lat, p.lng, `stopdot${isNext ? ' next' : ' mid'}`, isNext ? stopLabel(s.name) : null, isNext ? null : (vs ? routeOf(vs) : routeColor(d.trip)));
   });
   showRouteControls();
 }
@@ -1223,10 +1683,32 @@ async function boot() {
   const built = S.tt.meta.built ? new Date(S.tt.meta.built).toLocaleDateString('cs-CZ') : '';
   $('#data-info').textContent = built ? `Jízdní řády z ${built} · ${S.tt.meta.trips.toLocaleString('cs-CZ')} spojů` : '';
   pollVehicles();
-  setInterval(() => { if (S.journeys.length && !S.loadingMore) renderResults(); }, 30000);
+  setInterval(() => {
+    if (S.journeys.length && !S.loadingMore) renderResults();
+    if (S.detail) renderDetail();
+  }, 30000);
+  setInterval(() => refreshNearby(), 60000);
+  autoLocate();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 function pollVehiclesSafe() { S.live = { update() {}, forTrip() {}, detail: () => ({ trip: null }) }; pollVehicles(); }
+
+/**
+ * Poloha pro odjezdy z nejbližší zastávky: jen když ji uživatel už dřív povolil (bez vyskakovacího dotazu
+ * při otevření stránky). Přibližná poloha z IP adresy se nebere.
+ */
+async function autoLocate() {
+  try {
+    const p = await navigator.permissions?.query({ name: 'geolocation' });
+    if (p?.state !== 'granted') return;
+    const loc = await getLocation({ waitMs: 5000 });
+    if (loc.coarse) return;
+    S.loc = loc;
+    refreshNearby({ relocate: true });
+  } catch { /* bez polohy jen nejsou odjezdy z blízké zastávky */ }
+}
+
+$('#info-btn').addEventListener('click', () => showDialog($('#welcome')));
 
 // ?debug: stav appky v konzoli (měření, testy)
 if (new URLSearchParams(location.search).has('debug')) window.__spoje = S;

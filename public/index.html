@@ -28,9 +28,14 @@
         <img src="/assets/logo.svg" alt="" width="40" height="40">
         <span><strong>Spoje UK</strong><small>Doprava Ústeckého kraje</small></span>
       </a>
-      <button class="icon-btn" id="theme-btn" type="button" aria-label="Vzhled: automaticky" title="Vzhled">
-        <svg class="icon"><use href="/assets/icons.svg#auto"/></svg>
-      </button>
+      <div class="top-actions">
+        <button class="icon-btn" id="info-btn" type="button" aria-label="O aplikaci" title="O aplikaci" aria-haspopup="dialog">
+          <svg class="icon"><use href="/assets/icons.svg#info"/></svg>
+        </button>
+        <button class="icon-btn" id="theme-btn" type="button" aria-label="Vzhled: automaticky" title="Vzhled">
+          <svg class="icon"><use href="/assets/icons.svg#auto"/></svg>
+        </button>
+      </div>
     </header>
 
     <div class="scroll" id="scroll">
@@ -74,36 +79,57 @@
           </div>
           <button type="button" class="cat-btn" id="mode-btn" aria-haspopup="dialog"><svg class="icon"><use href="/assets/icons.svg#layers"/></svg><span id="mode-label">Všechny druhy</span><span class="cat-dots" id="mode-dots"></span><svg class="icon chev"><use href="/assets/icons.svg#chevron"/></svg></button>
         </div>
-        <div class="when" id="when" hidden>
-          <label>Datum <input type="date" id="date-input"></label>
-          <label>Čas <input type="time" id="time-input"></label>
+        <div class="when-wrap" id="when" hidden>
+          <div class="seg seg-wide" role="radiogroup" aria-label="Zvolený čas je">
+            <button type="button" role="radio" aria-checked="true" data-arrive="0">Odjezd</button>
+            <button type="button" role="radio" aria-checked="false" data-arrive="1">Příjezd</button>
+          </div>
+          <div class="when">
+            <label>Datum <input type="date" id="date-input"></label>
+            <label><span id="time-label">Čas odjezdu</span> <input type="time" id="time-input"></label>
+          </div>
         </div>
 
         <button class="btn btn-primary go" type="submit"><svg class="icon"><use href="/assets/icons.svg#search"/></svg>Najít spojení</button>
         <p class="form-msg" id="form-msg" role="alert" hidden></p>
       </form>
 
-      <section class="results" id="results" aria-live="polite" hidden>
-        <div class="results-head">
-          <h2>Výsledky</h2>
-          <div class="results-tools">
-            <button type="button" class="link-btn" id="earlier"><svg class="icon"><use href="/assets/icons.svg#arrow-up"/></svg>Dřívější</button>
-            <span class="count" id="count"></span>
-          </div>
-        </div>
-        <ol class="journeys" id="journeys"></ol>
-        <div class="more" id="more">
-          <button type="button" class="btn btn-soft" id="later">Zobrazit další spoje</button>
-        </div>
-      </section>
+      <section class="nearby card" id="nearby" hidden aria-labelledby="nearby-title"></section>
 
-      <section class="empty" id="empty" hidden></section>
+      <section class="trips" id="trips" aria-label="Oblíbená a nedávná spojení"></section>
 
       <footer class="legal">
-        <p>Neoficiální projekt, bez spojení s Dopravou Ústeckého kraje, DPmÚL ani Ministerstvem dopravy. Data mohou být neúplná nebo zpožděná, na kritické cesty se spoléhej na oficiální zdroje.</p>
+        <p>Svobodný open-source projekt (licence MIT), není spojený s žádným dopravcem, organizátorem dopravy ani jinou organizací. Data mohou být neúplná nebo zpožděná, na kritické cesty se spoléhej na oficiální zdroje.</p>
         <p><button type="button" class="link-btn" id="about-btn">O projektu</button> · <a href="https://github.com/Vasik96/spojeuk" rel="noopener">GitHub</a> · <span id="data-info"></span></p>
       </footer>
     </div>
+
+    <!-- výsledky hledání: podobrazovka přes hlavní (zpět = formulář s historií) -->
+    <section class="subview" id="results-view" hidden aria-label="Výsledky hledání">
+      <header class="sub-top">
+        <button type="button" class="icon-btn flat" data-back aria-label="Zpět"><svg class="icon"><use href="/assets/icons.svg#arrow-left"/></svg></button>
+        <div class="sub-title"><strong id="res-title"></strong><small id="res-sub"></small></div>
+        <button type="button" class="link-btn" id="earlier"><svg class="icon"><use href="/assets/icons.svg#arrow-up"/></svg>Dřívější</button>
+      </header>
+      <div class="scroll" id="res-scroll">
+        <section class="results" id="results" aria-live="polite">
+          <ol class="journeys" id="journeys"></ol>
+          <div class="more" id="more">
+            <button type="button" class="btn btn-soft" id="later">Zobrazit další spoje</button>
+          </div>
+        </section>
+        <section class="empty" id="empty" hidden></section>
+      </div>
+    </section>
+
+    <!-- detail spojení: všechny zastávky, živá zpoždění, vozy -->
+    <section class="subview" id="detail-view" hidden aria-label="Detail spojení">
+      <header class="sub-top">
+        <button type="button" class="icon-btn flat" data-back aria-label="Zpět"><svg class="icon"><use href="/assets/icons.svg#arrow-left"/></svg></button>
+        <div class="sub-title"><strong>Detail spojení</strong><small id="det-sub"></small></div>
+      </header>
+      <div class="scroll" id="det-scroll"></div>
+    </section>
   </aside>
 
   <main class="mapwrap" id="mapwrap" aria-label="Mapa vozidel">
@@ -141,7 +167,7 @@
       <li><svg class="icon"><use href="/assets/icons.svg#map"/></svg><span><strong>Živá mapa</strong> autobusů, tramvají a vlaků se zpožděním.</span></li>
       <li><svg class="icon"><use href="/assets/icons.svg#bus"/></svg><span><strong>Přidej si na plochu</strong> z nabídky prohlížeče a otevírá se jako aplikace.</span></li>
     </ul>
-    <p class="fine">Neoficiální projekt, bez spojení s Dopravou Ústeckého kraje, DPmÚL ani Správou železnic. Na kritické cesty se spoléhej na oficiální zdroje.</p>
+    <p class="fine">Svobodný open-source projekt (licence MIT), není spojený s žádným dopravcem, organizátorem dopravy ani jinou organizací. Na kritické cesty se spoléhej na oficiální zdroje.</p>
     <button class="btn btn-primary" value="ok" autofocus>Začít</button>
   </form>
 </dialog>
@@ -163,6 +189,14 @@
 </dialog>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<div class="toast snack" id="snack" role="status" aria-live="polite" hidden><span></span><button type="button" class="link-btn">Zpět</button></div>
+
+<dialog class="mini-dlg leg-dlg" id="leg-dlg" aria-labelledby="leg-title">
+  <form method="dialog">
+    <div id="leg-body"></div>
+    <div class="dlg-actions"><button class="btn" value="cancel">Zavřít</button></div>
+  </form>
+</dialog>
 
 <noscript><p style="padding:2rem;font-family:sans-serif">Spoje UK potřebuje JavaScript.</p></noscript>
 <script src="/vendor/maplibre-gl-csp.js"></script>

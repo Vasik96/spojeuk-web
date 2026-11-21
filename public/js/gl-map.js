@@ -123,8 +123,10 @@ export class MapView {
 
   toScreen(lat, lng) { const p = this.map.project([lng, lat]); return { x: p.x, y: p.y }; }
 
-  setView(center, zoom, { animate = false } = {}) {
+  /** offset = [x, y] px: bod center vyjde o tolik vedle středu mapy (např. pod kartou nahoře). */
+  setView(center, zoom, { animate = false, offset = null } = {}) {
     const o = { center: [center[1], center[0]], zoom: clamp(zoom ?? this.map.getZoom(), this.opts.minZoom, this.opts.maxZoom) };
+    if (offset) o.offset = offset;
     if (animate) this.map.easeTo({ ...o, duration: 600 }); else this.map.jumpTo(o);
   }
 

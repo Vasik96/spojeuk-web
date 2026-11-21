@@ -297,3 +297,114 @@ dialog.closing[open]::backdrop { animation: fade-out .18s ease forwards; }
 .dep-row .ripple { position: absolute; border-radius: 50%; background: currentColor; opacity: .14; transform: scale(0); animation: ripple .45s ease-out forwards; pointer-events: none; }
 @keyframes ripple { to { transform: scale(1); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .dep-row .ripple { display: none; } }
+
+/* ───────── hlavní obrazovka, podobrazovky, detail spojení (jako Android appka 5.9) ───────── */
+.top-actions { display: flex; gap: .5rem; }
+.icon.inline { display: inline-block; width: 1em; height: 1em; vertical-align: -.12em; }
+
+/* podobrazovky přes panel: výsledky, detail spojení */
+.subview { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; background: var(--bg); }
+.subview[hidden] { display: none; }
+.sub-top { display: flex; align-items: center; gap: .5rem; padding: calc(env(safe-area-inset-top) + .7rem) .8rem .5rem .6rem; }
+.icon-btn.flat { box-shadow: none; background: transparent; flex: none; }
+.icon-btn.flat:hover { background: var(--brand-50); }
+.sub-title { flex: 1; min-width: 0; }
+.sub-title strong { display: block; font-size: 1.12rem; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub-title small { display: block; color: var(--muted); font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.subview .results { margin-top: .2rem; }
+
+/* karta spoje */
+.j-main { flex: 1; min-width: 0; }
+.j-rel { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .4rem; }
+.j-rel .j-dur { color: var(--ink-2); font-weight: 500; }
+.j-actions { flex-direction: row; align-items: center; gap: .15rem; }
+.plain-icon { width: 42px; height: 42px; border: 0; border-radius: 50%; background: transparent; color: var(--ink-2); display: grid; place-items: center; }
+.plain-icon:hover { background: var(--brand-50); }
+.badge-btn { border: 0; padding: 0; background: none; border-radius: 10px; cursor: pointer; }
+.badge-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.badge.big { font-size: 1.2rem; padding: .3rem .75rem; border-radius: 12px; }
+.badge.big .icon { width: 1.2rem; height: 1.2rem; }
+.j-lines .sep .icon { width: 1rem; height: 1rem; vertical-align: middle; }
+.journey { cursor: pointer; }
+.tag { gap: .3rem; }
+.tag .icon { width: 1rem; height: 1rem; }
+.tag.nowrap { white-space: nowrap; }
+.tag.warn { background: var(--warn-bg); color: var(--warn); }
+.tag.soft { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line); }
+.transfer .risk { margin-top: .35rem; }
+
+/* detail spojení */
+#det-scroll { display: grid; gap: .8rem; align-content: start; }
+.det-sum { padding: 1rem 1.1rem; display: grid; gap: .55rem; }
+.j-times.big { font-size: 2.1rem; }
+.btn.wide { width: 100%; justify-content: center; min-height: 48px; }
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+.ride { padding: 1rem 1rem .6rem; }
+.ride-head { display: flex; align-items: center; gap: .75rem; margin-bottom: .5rem; }
+.ride-head strong { display: block; line-height: 1.25; }
+.ride-head small { display: block; color: var(--muted); font-size: .85rem; }
+.ride .chips { margin-bottom: .6rem; }
+.tl { list-style: none; margin: .4rem 0 0; padding: 0; }
+.tl > li { position: relative; display: grid; grid-template-columns: 3.6rem 1fr; gap: 0 1.6rem; min-height: 2rem; }
+/* kolejnice v barvě druhu dopravy, bod u každé zastávky (konečné větší a duté) */
+.tl > li::before { content: ""; position: absolute; left: calc(3.6rem + .8rem - 2px); top: 0; bottom: 0; width: 4px; background: var(--c); }
+.tl > li:first-child::before { top: .75rem; }
+.tl > li:last-child::before { bottom: calc(100% - .75rem); }
+.tl-stop::after { content: ""; position: absolute; left: calc(3.6rem + .8rem - 4.5px); top: calc(.75rem - 4.5px); width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+.tl-stop.term::after { left: calc(3.6rem + .8rem - 8px); top: calc(.75rem - 8px); width: 16px; height: 16px; box-sizing: border-box; background: var(--surface); border: 3.5px solid var(--c); }
+.tl-time { text-align: right; font-variant-numeric: tabular-nums; padding-top: .2rem; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
+.tl-time s { color: var(--muted); font-size: .85rem; }
+.tl-time b.late { color: var(--late); }
+.tl-time b.warn { color: var(--warn); }
+.tl-name { padding: .2rem 0 .45rem; }
+.tl-stop.term .tl-name, .tl-stop.term .tl-time span { font-weight: 700; }
+.tl-name small { display: block; color: var(--muted); font-size: .82rem; font-weight: 400; }
+.tl-stop.passed > span { opacity: .5; }
+.tl-toggle > * { grid-column: 2; }
+.tl-toggle button, .tl-toggle span { border: 0; background: none; color: var(--brand-600); font-weight: 650; font-size: .9rem; padding: .35rem 0; display: inline-flex; align-items: center; gap: .3rem; }
+.tl-toggle span { color: var(--muted); }
+.tl-toggle .icon { transition: transform .2s; }
+.tl-toggle button[aria-expanded="true"] .icon { transform: rotate(180deg); }
+.walk-row { display: flex; align-items: center; gap: .7rem; padding: .2rem .6rem; color: var(--ink-2); }
+.walk-row strong { display: block; font-size: .95rem; }
+.walk-row small { display: block; color: var(--muted); }
+.walk-ico { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--brand-100); color: var(--brand-700); flex: none; }
+.transfer-row { display: flex; flex-wrap: wrap; gap: .4rem; padding: 0 .6rem; }
+
+/* detail jedné jízdy (dialog) */
+.leg-dlg { width: min(420px, calc(100vw - 32px)); }
+.leg-kicker { color: var(--muted); font-weight: 650; margin: 0 0 .6rem; }
+.leg-dlg .chips { margin-bottom: .4rem; }
+.leg-dlg .wide { margin-top: .8rem; }
+
+/* oblíbená a nedávná spojení */
+.sec-title { font-size: 1.05rem; font-weight: 700; margin: 1.2rem .4rem .55rem; }
+.trip-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.trip-row { position: relative; border-radius: 22px; overflow: hidden; }
+.trip-bg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 1.3rem; background: var(--late-bg); color: var(--late); opacity: 0; transition: opacity .15s; }
+.trip-bg::after { content: ""; }
+.trip-row.swiping .trip-bg { opacity: .7; }
+.trip-row.armed .trip-bg { opacity: 1; }
+.trip-fg { position: relative; display: flex; align-items: center; gap: .1rem; padding: .3rem .4rem .3rem .3rem; background: var(--surface); border: 1px solid var(--line); border-radius: 22px; touch-action: pan-y; }
+.trip-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: .75rem; border: 0; background: none; text-align: left; padding: .35rem; color: inherit; border-radius: 16px; }
+.trip-ico { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--brand-100); color: var(--brand-700); flex: none; }
+.trip-txt { min-width: 0; }
+.trip-txt strong, .trip-txt small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trip-txt small { color: var(--muted); font-size: .9rem; }
+.trip-txt small .icon { margin-right: .25rem; }
+.mini.del { display: none; }
+@media (hover: hover) and (pointer: fine) { .mini.del { display: grid; } }
+
+/* odjezdy z nejbližší zastávky */
+.nearby { margin-top: 1rem; padding: .8rem .7rem .5rem .9rem; }
+.nearby[hidden] { display: none; }
+.nearby-head { display: flex; align-items: center; gap: .6rem; margin-bottom: .3rem; }
+.nearby-head > .icon { color: var(--muted); }
+.nearby-head div { flex: 1; min-width: 0; }
+.nearby-head small { display: block; color: var(--muted); font-size: .8rem; }
+.nearby-head strong { display: block; font-size: 1.05rem; }
+
+/* oznámení s akcí ("Odebráno · Zpět") */
+.toast.snack { display: flex; align-items: center; justify-content: space-between; gap: 1rem; text-align: left; }
+.toast.snack[hidden] { display: none; }
+.toast.snack .link-btn { color: var(--brand-300); white-space: nowrap; }

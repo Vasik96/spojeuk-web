@@ -21,6 +21,7 @@ Při prvním startu bez dat se jízdní řády a trasy stáhnou samy. Server kon
 | Data | `lib/build-timetable.mjs` | GTFS (autobusy + vlaky) → kompaktní JSON (~4 MB, ~0,4 MB po kompresi). Stejná logika jako `GtfsImporter` v appce, včetně párování nádraží |
 | Hledání | `public/js/planner.js` | RAPTOR, přestupy ≥ 120 s, pěšky do 250 m. Běží v prohlížeči, tedy offline |
 | Napovídání | `public/js/suggest.js` | používání → vzdálenost → zbytek |
+| Logika spojení | `public/js/journey-logic.js` | aktuální jízda pro Mapu, ohrožený přestup, hledání podle příjezdu (stejná pravidla jako appka) |
 | Živá vozidla | `lib/hub.mjs`, `public/js/live.js` | server čte sloučená vozidla ze `spoje-feed` (`/api/vehicles`), klient je páruje se spoji |
 | Vozidla mimo oblast | `lib/trip-lookup.mjs` | `GET /api/vehicle-trip`: spoj, zastávky a tvar trasy z celostátního jízdního řádu (`data/timetable.sqlite` + tvary tras, stahuje `npm run data`), párování jako v appce |
 | Vozidla na mapě | `public/js/vehicle-layer.js` | canvas nad mapou: tečky / štítky, barvy podle druhu, prolínání, plynulý pohyb, filtr |
