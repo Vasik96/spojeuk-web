@@ -23,7 +23,8 @@ export const STYLES = {
   BUS_LATE: { color: '#C62828', route: '#1B5E20', routeDark: '#66BB6A' },   // trasa zpožděného autobusu je autobusová
   TRAIN: { color: '#0277BD', route: '#01579B', routeDark: '#4FC3F7' },
   TRAM: { color: '#EF6C00', route: '#C25400', routeDark: '#FFB74D' },       // oranžová (dřív fialová)
-  TROLLEYBUS: { color: '#00897B', route: '#00695C', routeDark: '#4DB6AC' }, // tyrkysová; zpoždění = červený rámeček
+  TROLLEYBUS: { color: '#009688', route: '#00695C', routeDark: '#4DB6AC' }, // tyrkysová
+  TROLLEYBUS_LATE: { color: '#C62828', route: '#00695C', routeDark: '#4DB6AC' }, // červený vůz, trasa zůstává trolejbusová
   METRO_A: { color: '#00A562', route: '#007A48', routeDark: '#4CD08F' },
   METRO_B: { color: '#F8B322', darkText: true, route: '#C68A00', routeDark: '#FFD36B' },
   METRO_C: { color: '#D6006F', route: '#A10054', routeDark: '#F0609F' },     // malinová: červená C splývala se zpožděnými autobusy
@@ -57,11 +58,11 @@ export const isDpmulTrolleybus = (line, agency) =>
   DPMUL_TROLLEYBUS_LINES.has(String(line ?? '').trim()) && /Ústí nad Labem/.test(agency || '') && /Dopravní podnik/.test(agency || '');
 
 export function vehicleStyle(v) {
-  if (v.mode === 'trolleybus') return 'TROLLEYBUS';
+  if (v.mode === 'trolleybus') return v.delay > 3 ? 'TROLLEYBUS_LATE' : 'TROLLEYBUS';
   // vozy DPMÚL (i když polohu dodává DÚK): trolejbusové linky podle seznamu
   if (vehicleMode(v) === 'bus' && DPMUL_TROLLEYBUS_LINES.has(String(v.line ?? '').trim()) &&
       (v.source === 'dpmul' || isDpmulTrolleybus(v.line, v.agency) || (v.source === 'duk' && (v.ids || []).some((x) => String(x).startsWith('dpmul:'))))) {
-    return 'TROLLEYBUS';
+    return v.delay > 3 ? 'TROLLEYBUS_LATE' : 'TROLLEYBUS';
   }
   switch (vehicleMode(v)) {
     case 'train': return 'TRAIN';

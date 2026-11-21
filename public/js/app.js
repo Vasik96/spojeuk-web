@@ -291,7 +291,7 @@ function vehicleTerminal(v) {
 }
 
 /** Druh vozidla v jednotném čísle; trolejbus podle `mode` ze serveru (na mapě patří k autobusům). */
-const kindOf = (v) => (vehicleStyle(v) === 'TROLLEYBUS' ? 'trolleybus' : vehicleMode(v));
+const kindOf = (v) => (vehicleStyle(v).startsWith('TROLLEYBUS') ? 'trolleybus' : vehicleMode(v));
 
 /** Víc vozidel pod prstem (třeba dva vlaky v jedné stanici): výběr ze seznamu. */
 function chooseVehicle(hits) {
