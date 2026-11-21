@@ -175,12 +175,12 @@ body { overscroll-behavior: none; }
 }
 .fab { position: absolute; z-index: 4; right: 12px; bottom: 140px; width: 48px; height: 48px; border-radius: 16px; border: 0; background: var(--surface); color: var(--brand-600); box-shadow: var(--shadow-2); display: grid; place-items: center; }
 
-.sheet { position: absolute; z-index: 30; left: 0; right: 0; bottom: 0; max-height: min(72%, calc(100dvh - 130px)); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; background: var(--surface); border-radius: 28px 28px 0 0; box-shadow: 0 -10px 40px rgba(10, 37, 64, .22); padding: 1.1rem 1.2rem calc(1.2rem + env(safe-area-inset-bottom)); animation: slide .28s cubic-bezier(.2, .8, .2, 1); }
+.sheet { position: absolute; z-index: 30; left: 0; right: 0; bottom: 0; max-height: min(72%, calc(100dvh - 130px), calc(100% - var(--banner-bottom, 88px) - 12px)); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; background: var(--surface); border-radius: 28px 28px 0 0; box-shadow: 0 -10px 40px rgba(10, 37, 64, .22); padding: 1.1rem 1.2rem calc(1.2rem + env(safe-area-inset-bottom)); animation: slide .28s cubic-bezier(.2, .8, .2, 1); }
 @keyframes slide { from { transform: translateY(40px); opacity: 0; } }
 .sheet[hidden] { display: none; }
 .sheet::before { content: ""; display: block; width: 44px; height: 5px; border-radius: 3px; background: var(--line); margin: -.4rem auto .8rem; }
 .sheet-close { position: absolute; right: .8rem; top: .8rem; width: 38px; height: 38px; border-radius: 50%; border: 0; background: var(--brand-50); color: var(--ink-2); display: grid; place-items: center; }
-@media (min-width: 960px) { .sheet { left: 12px; right: auto; bottom: 12px; width: 400px; border-radius: 26px; max-height: calc(100% - 100px); } .sheet::before { display: none; } }
+@media (min-width: 960px) { .sheet { left: 12px; right: auto; bottom: 12px; width: 400px; border-radius: 26px; max-height: calc(100% - var(--banner-bottom, 88px) - 24px); } .sheet::before { display: none; } }
 .sheet h3 { font-size: 1.05rem; color: var(--ink-2); font-weight: 650; margin-bottom: .6rem; }
 .sheet .big-badge { display: inline-flex; align-items: center; gap: .5rem; padding: .4rem .9rem; border-radius: 14px; background: #2f9e5b; color: #fff; font-size: 1.6rem; font-weight: 800; }
 .sheet .big-badge.train { background: var(--train); } .sheet .big-badge.late { background: #d6383e; }
@@ -287,7 +287,8 @@ dialog.closing[open]::backdrop { animation: fade-out .18s ease forwards; }
 
 /* ───────────── zastávky: odjezdy ───────────── */
 .sheet .stop-name { font-size: 1.35rem; font-weight: 800; margin: 0 0 .1rem; }
-.stop-deps { list-style: none; margin: .8rem 0 0; padding: .6rem 0 0; border-top: 1px solid var(--line); display: grid; gap: .15rem; }
+.stop-deps { list-style: none; margin: .8rem 0 0; padding: .6rem 0 0; border-top: 1px solid var(--line); display: grid; grid-template-columns: minmax(0, 1fr); gap: .15rem; }
+.stop-deps > li { min-width: 0; }
 .dep-row { position: relative; overflow: hidden; display: flex; align-items: center; gap: .75rem; width: 100%; padding: .55rem .45rem; border: 0; border-radius: 14px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background .15s; }
 .dep-row:hover { background: var(--surface-2); }
 .dep-row .badge { min-width: 3.2rem; flex: none; }

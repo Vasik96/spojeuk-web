@@ -1087,6 +1087,9 @@ function stopSheetShift() {
   return Math.max(0, h / 2 - (bannerBottom() + sheetTop) / 2);
 }
 
+// spodní okraj stavové karty pro CSS (panel vozidla / odjezdů pod ni nezajede); karta mění výšku podle zdrojů
+new ResizeObserver(() => $('#mapwrap').style.setProperty('--banner-bottom', `${Math.round(bannerBottom())}px`)).observe($('#status'));
+
 /** Spodní okraj stavové karty "Mapa vozidel" nahoře (px v mapě): co je pod ní, není vidět. */
 function bannerBottom() {
   const s = $('#status'), w = $('#mapwrap');
@@ -1711,6 +1714,6 @@ async function autoLocate() {
 $('#info-btn').addEventListener('click', () => showDialog($('#welcome')));
 
 // ?debug: stav appky v konzoli (měření, testy)
-if (new URLSearchParams(location.search).has('debug')) window.__spoje = S;
+if (new URLSearchParams(location.search).has('debug')) { window.__spoje = S; S.openStop = openStop; }
 
 boot();

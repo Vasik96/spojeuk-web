@@ -218,10 +218,15 @@ export class Net {
   }
 }
 
-/** Odstraní spojení, která jsou horší než jiné (později nebo stejně odjíždí, dřív nebo stejně dojede, ≤ přestupů). */
-export function prune(js) {
+/**
+ * Odstraní spojení, která jsou horší než jiné (později nebo stejně odjíždí, dřív nebo stejně dojede, ≤ přestupů).
+ * maskOf(j) = druhy dopravy spojení (bity): přebít ho smí jen spojení, které nepoužívá žádný jiný druh, takže
+ * rychlejší vlak nevyřadí přímý autobus (chce-li někdo jet jen autobusem, musí ho vidět i při "všechny druhy").
+ */
+export function prune(js, maskOf = null) {
   const abs = (j, v) => v + dayDiff(js[0].day, j.day) * 86400;
-  const keep = js.filter((j) => !js.some((k) => k !== j
+  const sub = (k, j) => !maskOf || (maskOf(k) & ~maskOf(j)) === 0;
+  const keep = js.filter((j) => !js.some((k) => k !== j && sub(k, j)
     && abs(k, k.dep) >= abs(j, j.dep) && abs(k, k.arr) <= abs(j, j.arr) && k.transfers <= j.transfers
     && !(abs(k, k.dep) === abs(j, j.dep) && abs(k, k.arr) === abs(j, j.arr) && k.transfers === j.transfers)));
   return keep.sort((a, b) => abs(a, a.dep) - abs(b, b.dep) || abs(a, a.arr) - abs(b, b.arr));
@@ -248,7 +253,35 @@ export class Planner {
    * @param {string} toPlace   místo kam
    * @param {{day:string, sec:number}} start
    */
-  find(fromPlace, toPlace, start, { count = 8, endSec, horizonHours = 14, mode = MODES.ALL } = {}) {
+  /** Druhy dopravy spojení jako bity (bus 1, tramvaj 2, metro 4, vlak 8). */
+  mask(j) {
+    if (j._mask != null) return j._mask;
+    let m = 0;
+    for (const l of j.legs) if (l.kind !== 'walk') { const t = this.tt.trips[l.tid]; m |= 1 << CATS.indexOf(t.cat ??= tripCategory(t)); }
+    return (j._mask = m);
+  }
+
+  /**
+   * Spojení od start. Při víc druzích dopravy (i "všechny") se kromě společného hledání hledá i každým druhem
+   * zvlášť: RAPTOR vrací pro každý odjezd jen nejrychlejší cestu, takže by přímý autobus, který dojede později než
+   * vlak, vůbec nenašel. Výsledky se sloučí do času, který pokryla všechna hledání (ať ve výsledcích nejsou díry).
+   */
+  find(fromPlace, toPlace, start, opts = {}) {
+    const { count = 8 } = opts;
+    const cats = catSet(opts.mode);
+    const list = cats ? [...cats] : CATS;
+    if (list.length <= 1) return this.findOne(fromPlace, toPlace, start, opts);
+    const runs = [this.findOne(fromPlace, toPlace, start, opts), ...list.map((c) => this.findOne(fromPlace, toPlace, start, { ...opts, mode: new Set([c]) }))];
+    const absDep = (j) => j.dep + dayDiff(start.day, j.day) * 86400;
+    // hledání, které skončilo na počtu, pokrylo čas jen po svůj poslední odjezd; ostatní celé okno
+    let horizon = Infinity;
+    for (const r of runs) if (r.length >= count) horizon = Math.min(horizon, Math.max(...r.map(absDep)));
+    const all = new Map();
+    for (const r of runs) for (const j of r) if (absDep(j) <= horizon) all.set(j.key, j);
+    return prune([...all.values()], (j) => this.mask(j));
+  }
+
+  findOne(fromPlace, toPlace, start, { count = 8, endSec, horizonHours = 14, mode = MODES.ALL } = {}) {
     const tt = this.tt;
     const net = this.net(start.day);
     let t = Math.max(0, start.sec);
@@ -264,7 +297,7 @@ export class Planner {
       for (const j of js) if (j.dep <= tEnd) out.set(j.key, j);
       t = Math.min(...js.map((j) => j.dep)) + 1;
     }
-    const pruned = prune([...out.values()]);
+    const pruned = prune([...out.values()], (j) => this.mask(j));
     const cats = catSet(mode);
     return !cats ? pruned
       : pruned.filter((j) => j.legs.every((l) => l.kind !== 'ride' || accepts(cats, tt.trips[l.tid])));
@@ -278,7 +311,7 @@ export class Planner {
     while (sec >= 86400) { sec -= 86400; day = addDays(day, 1); }
     const fresh = this.find(fromPlace, toPlace, { day, sec }, { count, mode });
     const have = new Set(journeys.map((j) => j.key));
-    return prune([...journeys, ...fresh.filter((j) => !have.has(j.key))]);
+    return prune([...journeys, ...fresh.filter((j) => !have.has(j.key))], (j) => this.mask(j));
   }
 
   /** Dřívější spojení před prvním z již nalezených (ve stejném dni). */
@@ -289,7 +322,7 @@ export class Planner {
     const fresh = this.find(fromPlace, toPlace, { day: first.day, sec: lo }, { count: 60, endSec: first.dep - 1, mode })
       .sort((a, b) => a.dep - b.dep).slice(-count);
     const have = new Set(journeys.map((j) => j.key));
-    return prune([...journeys, ...fresh.filter((j) => !have.has(j.key))]);
+    return prune([...journeys, ...fresh.filter((j) => !have.has(j.key))], (j) => this.mask(j));
   }
 }
 
