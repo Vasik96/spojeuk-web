@@ -23,6 +23,7 @@ export const STYLES = {
   BUS_LATE: { color: '#C62828', route: '#1B5E20', routeDark: '#66BB6A' },   // trasa zpožděného autobusu je autobusová
   TRAIN: { color: '#0277BD', route: '#01579B', routeDark: '#4FC3F7' },
   TRAM: { color: '#EF6C00', route: '#C25400', routeDark: '#FFB74D' },       // oranžová (dřív fialová)
+  TROLLEYBUS: { color: '#00897B', route: '#00695C', routeDark: '#4DB6AC' }, // tyrkysová; zpoždění = červený rámeček
   METRO_A: { color: '#00A562', route: '#007A48', routeDark: '#4CD08F' },
   METRO_B: { color: '#F8B322', darkText: true, route: '#C68A00', routeDark: '#FFD36B' },
   METRO_C: { color: '#D6006F', route: '#A10054', routeDark: '#F0609F' },     // malinová: červená C splývala se zpožděnými autobusy
@@ -46,7 +47,22 @@ export function vehicleMode(v) {
   return 'bus';
 }
 
+/**
+ * Trolejbusové linky DPMÚL (Ústí nad Labem): DPMÚL ani DÚK druh vozidla neposílají a jízdní řád ho nemá, proto pevný
+ * seznam (denní 70–76, 80, 84, 87, 88, noční 43, 46). PID posílá mode = "trolleybus". Stejně jako v Android appce.
+ */
+export const DPMUL_TROLLEYBUS_LINES = new Set(['70', '71', '72', '73', '74', '75', '76', '80', '84', '87', '88', '43', '46']);
+/** Linka dopravce agency je ústecký trolejbus (stejná čísla jinde, třeba v Teplicích, nejsou). */
+export const isDpmulTrolleybus = (line, agency) =>
+  DPMUL_TROLLEYBUS_LINES.has(String(line ?? '').trim()) && /Ústí nad Labem/.test(agency || '') && /Dopravní podnik/.test(agency || '');
+
 export function vehicleStyle(v) {
+  if (v.mode === 'trolleybus') return 'TROLLEYBUS';
+  // vozy DPMÚL (i když polohu dodává DÚK): trolejbusové linky podle seznamu
+  if (vehicleMode(v) === 'bus' && DPMUL_TROLLEYBUS_LINES.has(String(v.line ?? '').trim()) &&
+      (v.source === 'dpmul' || isDpmulTrolleybus(v.line, v.agency) || (v.source === 'duk' && (v.ids || []).some((x) => String(x).startsWith('dpmul:'))))) {
+    return 'TROLLEYBUS';
+  }
   switch (vehicleMode(v)) {
     case 'train': return 'TRAIN';
     case 'tram': return 'TRAM';
@@ -75,7 +91,7 @@ export const CATEGORIES = [
 /** Zpoždění tramvaje / metra (u nich barva zpoždění neukazuje): červený rámeček kolem štítku / tečky. */
 export function lateMinutes(v) {
   const s = vehicleStyle(v);
-  return (s === 'TRAM' || s.startsWith('METRO')) && v.delay > 3 ? Math.min(99, v.delay) : 0;
+  return (s === 'TRAM' || s === 'TROLLEYBUS' || s.startsWith('METRO')) && v.delay > 3 ? Math.min(99, v.delay) : 0;
 }
 
 // ───────────── bitmapy ─────────────
