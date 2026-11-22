@@ -183,6 +183,11 @@ function initMap() {
     if (st) { openStop(st); return; }
     if (S.selected || S.stopSel) closeSheet();
   });
+  S.map.on('mousemove', (e) => {
+    const overVehicle = S.vlayer.hitTest(e.point.x, e.point.y).length > 0;
+    const overStop = !!S.slayer?.hitTest(e.point.x, e.point.y);
+    S.map.map.getCanvas().style.cursor = overVehicle || overStop ? 'pointer' : '';
+  });
   setupFilter();
 }
 
