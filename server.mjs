@@ -156,14 +156,17 @@ async function pmdpTripJson(conn) {
 async function vehicleTripJson(q) {
   if (q.get('pmdp')) return pmdpTripJson(String(q.get('pmdp')));
   const num = (k) => { const x = Number(q.get(k)); return Number.isFinite(x) ? x : null; };
+  const rawHeading = q.get('heading');
+  const heading = rawHeading === null || rawHeading === '' ? null : num('heading');
+  const usableHeading = heading != null && heading !== 0;
   const v = {
     line: String(q.get('line') || '').slice(0, 20), lat: num('lat'), lng: num('lng'), delay: num('delay') || 0,
-    heading: q.get('heading') === null || q.get('heading') === '' ? null : num('heading'),
+    heading: usableHeading ? heading : null,
     dest: String(q.get('dest') || '').slice(0, 80), train: q.get('train') === '1', num: String(q.get('num') || '').slice(0, 12), mode: String(q.get('mode') || '').slice(0, 12),
   };
   if (v.lat == null || v.lng == null || (!v.line && !v.num)) return { status: 400, body: '{"error":"chybí linka nebo poloha"}' };
   // vůz se dotazuje opakovaně (každé obnovení detailu): stejná linka a skoro stejné místo => stejný výsledek
-  const key = [v.line, v.num, v.train, v.dest, v.lat.toFixed(3), v.lng.toFixed(3), Math.round(v.delay)].join('|');
+  const key = [v.line, v.num, v.train, v.dest, v.lat.toFixed(3), v.lng.toFixed(3), Math.round(v.delay), v.heading ?? '', v.mode].join('|');
   const hit = tripCache.get(key);
   if (hit && Date.now() - hit.at < 30_000) return { status: 200, body: hit.body };
   const l = await getLookup();

@@ -1101,8 +1101,10 @@ function bannerBottom() {
 // ───────────── trasy na mapě ─────────────
 let overlayGen = 0; // zahodí pozdě doražené trasy, když mezitím došlo ke změně na mapě
 let flashTimer;
+let activeLiveRoute = null;
 function clearOverlay() {
   overlayGen++;
+  activeLiveRoute = null;
   S.overlay.lines.forEach((l) => l.remove()); S.overlay.markers.forEach((m) => m.remove());
   S.overlay = { lines: [], markers: [] };
   hideEl($('#clear-route'), { y: -8 });
@@ -1176,6 +1178,7 @@ function showJourneyOnMap(d) {
   if (lpEnd) pin(lpEnd.lat, lpEnd.lng, true, stopLabel(prettyName(last.name)));
   showRouteControls();
   goMap();
+  activeLiveRoute = { d, routePts: allPts, key: null };
   focusLive(d, allPts);
 }
 
@@ -1195,6 +1198,7 @@ function focusLive(d, routePts = []) {
   // vůz spoje stejně jako v appce: spárovaný se spojem (i DPMÚL podle polohy), jinak nejbližší vůz linky před nástupem
   const live = S.live.vehicleForJourney?.(d)?.v;
   const liveUid = live && S.vehicles.some((x) => vehicleUid(x) === vehicleUid(live)) ? vehicleUid(live) : null;
+  if (activeLiveRoute?.d === d) activeLiveRoute.key = liveUid ? `${liveUid}|${live?.heading ?? 'none'}` : 'none';
   if (!liveUid) {
     // dřív tlačítko „nic neudělalo“: když vůz spoje teď nevidíme, aspoň to řekneme
     setTimeout(() => toast('Vůz tohoto spoje teď na mapě nevidíme, ukazuji jen trasu.'), 250);
@@ -1206,6 +1210,16 @@ function focusLive(d, routePts = []) {
     fitUnderBanner([...routePts, [p.lat, p.lng]]);
     focusUid(liveUid, { move: false });
   } else focusUid(liveUid);
+}
+
+function refreshActiveLiveRoute() {
+  if (!activeLiveRoute) return;
+  const live = S.live.vehicleForJourney?.(activeLiveRoute.d)?.v;
+  const liveUid = live && S.vehicles.some((x) => vehicleUid(x) === vehicleUid(live)) ? vehicleUid(live) : null;
+  const key = liveUid ? `${liveUid}|${live?.heading ?? 'none'}` : 'none';
+  if (key !== activeLiveRoute.key) {
+    focusLive(activeLiveRoute.d, activeLiveRoute.routePts);
+  }
 }
 
 /** Výřez se všemi body ve viditelné části mapy (pod stavovou kartou nahoře). */
@@ -1250,6 +1264,7 @@ async function pollVehicles() {
     S.sourceNames = Object.fromEntries((snap.sources || []).map((s) => [s.id, s.name]));
     S.live.update(S.vehicles);
     updateVehicleMarkers();
+    refreshActiveLiveRoute();
     $('#status-sub').textContent = `${S.vehicles.length} poloh`;
     const sourceStatus = $('#source-status');
     sourceStatus.replaceChildren(document.createTextNode('Zdroj: '));
@@ -1519,7 +1534,9 @@ function showDeparture(dep) {
   goMap();
   // celá trasa do záběru (pod stavovou kartou), pak případně přiblížení na vůz
   fitUnderBanner(line);
-  focusLive({ rides: [{ tid: dep.tid, from: dep.from, to: ids.at(-1), dep: dep.dep }], day: dep.day }, line);
+  const d = { rides: [{ tid: dep.tid, from: dep.from, to: ids.at(-1), dep: dep.dep }], day: dep.day };
+  activeLiveRoute = { d, routePts: line, key: null };
+  focusLive(d, line);
 }
 
 /** Odjezd ze zastávky mimo kraj: spoj ze serveru (zastávky na nástupištích, tvar trasy) a jeho vůz na mapě. */

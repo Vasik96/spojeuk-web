@@ -18,6 +18,7 @@ const bearing = (la1, lo1, la2, lo2) => {
   return ((Math.atan2(y, x) / r) + 360) % 360;
 };
 const angleDiff = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+const usableHeading = (h) => Number.isFinite(h) && h !== 0;
 
 export async function fetchVehicles() {
   const res = await fetch(`${CONFIG.API_BASE}/api/vehicles`, { cache: 'no-store' });
@@ -109,7 +110,7 @@ export class LiveTracker {
           if (cost < score) { score = cost; legHeading = bearing(a.lat, a.lng, b.lat, b.lng); }
         }
         if (score === Infinity) continue;
-        if (v.heading != null && v.heading !== 0 && !Number.isNaN(legHeading) && angleDiff(v.heading, legHeading) > 90) continue;
+        if (usableHeading(v.heading) && !Number.isNaN(legHeading) && angleDiff(v.heading, legHeading) > 90) continue;
         const h = foldText(t.head);
         if (wanted && h) { if (h.includes(wanted) || wanted.includes(h)) score -= 250; else continue; }
         if (score < bestScore) { bestScore = score; best = tid; }
@@ -164,10 +165,11 @@ export class LiveTracker {
       const exact = v.train ? tt.findTrainTripId(v.cis) : v.cis && v.cis !== '000000' && v.trip ? tt.findTripId(v.cis, v.trip) : null;
       if (exact) { v._tid = exact; v._exact = true; continue; }
       if (v.train || v.lat < REGION.s || v.lat > REGION.n || v.lng < REGION.w || v.lng > REGION.e) continue;
+      const key = [v.line, v.lat.toFixed(3), v.lng.toFixed(3), Math.round(v.delay || 0), foldText(v.dest || ''), usableHeading(v.heading) ? v.heading : null].join('|');
       const c = this.matchCache.get(v.uid);
-      if (c && c.line === v.line && nowMs - c.at < MATCH_TTL_MS) { v._tid = c.tid; continue; }
+      if (c && c.key === key && nowMs - c.at < MATCH_TTL_MS) { v._tid = c.tid; continue; }
       v._tid = this.matchByPosition(v, now);
-      this.matchCache.set(v.uid, { at: nowMs, line: v.line, tid: v._tid });
+      this.matchCache.set(v.uid, { at: nowMs, key, tid: v._tid });
     }
     if (this.matchCache.size > 3000) this.matchCache.clear();
     for (const v of vehicles) {

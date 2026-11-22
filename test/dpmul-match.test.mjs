@@ -34,5 +34,13 @@ test('DPMÚL vůz bez čísla spoje se zpožděním 14 min se spáruje podle pol
 test('opačný cíl spoj nespáruje', () => {
   const c = pickCase(0);
   const v = { source: 'dpmul', train: false, line: c.t.line, delay: 0, dest: 'Neexistující konečná', lat: c.s.lat, lng: c.s.lng };
-  assert.equal(tt.matchByPosition(v, ['dpmul'], c.now), null);
+  const live = new LiveTracker(tt);
+  assert.equal(live.matchByPosition(v, c.now), null);
+});
+
+test('DPMÚL azimut nula se nepovažuje za směr na sever', async () => {
+  const { usableHeading } = await import('../lib/trip-lookup.mjs');
+  assert.equal(usableHeading(0), false);
+  assert.equal(usableHeading(null), false);
+  assert.equal(usableHeading(180), true);
 });
