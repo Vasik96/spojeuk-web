@@ -1132,13 +1132,11 @@ function dot(lat, lng, cls, label, color = null) {
   }
 }
 
-function pin(lat, lng, to, label) {
+function pin(lat, lng, to) {
   const el = document.createElement('div');
   el.className = `endpoint${to ? ' to' : ''}`;
   el.innerHTML = icon(to ? 'map' : 'pin');
   S.overlay.markers.push(S.map.addMarker({ lat, lng, el, z: 8 }));
-  const l = document.createElement('div'); l.className = 'stop-label'; l.textContent = label;
-  S.overlay.markers.push(S.map.addMarker({ lat, lng, el: l, z: 7 }));
 }
 
 function showJourneyOnMap(d) {
@@ -1176,10 +1174,9 @@ function showJourneyOnMap(d) {
   const rideLegs = d.legs.filter((l) => l.kind !== 'walk');
   const at = (l, idx) => legPoints(l).at(idx);
   rideLegs.slice(0, -1).forEach((l) => { const p = at(l, -1), s = sp(l.stops.at(-1).stop); if (p) dot(p.lat, p.lng, 'stopdot', stopLabel(prettyName(s.name)), routeColor(tt.trips[l.tid])); });
-  const first = sp(d.rides[0].from), last = sp(d.rides[d.rides.length - 1].to);
   const fp = rideLegs.length ? at(rideLegs[0], 0) : null, lpEnd = rideLegs.length ? at(rideLegs.at(-1), -1) : null;
-  if (fp) pin(fp.lat, fp.lng, false, stopLabel(prettyName(first.name)));
-  if (lpEnd) pin(lpEnd.lat, lpEnd.lng, true, stopLabel(prettyName(last.name)));
+  if (fp) pin(fp.lat, fp.lng, false);
+  if (lpEnd) pin(lpEnd.lat, lpEnd.lng, true);
   showRouteControls();
   goMap();
   activeLiveRoute = { d, routePts: allPts, key: null };
@@ -1531,7 +1528,7 @@ function showDeparture(dep) {
   const real = pts.map((p, i) => [p, i]).filter(([p]) => p);
   real.forEach(([p, i], k) => {
     const name = prettyName(tt.stops[ids[i]].name);
-    if (k === 0 || k === real.length - 1) pin(p.lat, p.lng, k === real.length - 1, stopLabel(name));
+    if (k === 0 || k === real.length - 1) pin(p.lat, p.lng, k === real.length - 1);
     else dot(p.lat, p.lng, `stopdot${ids[i] === dep.from ? '' : ' mid'}`, ids[i] === dep.from ? stopLabel(name) : null, routeColor(t));
   });
   showRouteControls();
@@ -1563,7 +1560,7 @@ async function showRemoteDeparture(dep) {
   const boardI = real.findIndex(([, i]) => trip.stops[i] && trip.stops[i][4] % 86400 === dep.dep % 86400);
   real.forEach(([p, i], k) => {
     const name = stopLabel(prettyName(trip.stops[i][0]));
-    if (k === 0 || k === real.length - 1) pin(p[0], p[1], k === real.length - 1, name);
+    if (k === 0 || k === real.length - 1) pin(p[0], p[1], k === real.length - 1);
     else dot(p[0], p[1], `stopdot${k === boardI ? '' : ' mid'}`, k === boardI ? name : null, routeColor(trip));
   });
   showRouteControls();
@@ -1605,7 +1602,7 @@ function drawVehicleRoute(d) {
     if (!s.has) return;
     const p = plat?.[i] || s;
     const isNext = i === d.nextIdx, isEnd = i === d.stops.length - 1;
-    if (i === 0 || isEnd) pin(p.lat, p.lng, isEnd, stopLabel(s.name));
+    if (i === 0 || isEnd) pin(p.lat, p.lng, isEnd);
     else dot(p.lat, p.lng, `stopdot${isNext ? ' next' : ' mid'}`, isNext ? stopLabel(s.name) : null, isNext ? null : (vs ? routeOf(vs) : routeColor(d.trip)));
   });
   showRouteControls();
