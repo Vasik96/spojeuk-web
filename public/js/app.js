@@ -1136,7 +1136,9 @@ function pin(lat, lng, to) {
   const el = document.createElement('div');
   el.className = `endpoint${to ? ' to' : ''}`;
   el.innerHTML = icon(to ? 'map' : 'pin');
-  S.overlay.markers.push(S.map.addMarker({ lat, lng, el, z: 8 }));
+  const marker = S.map.addMarker({ lat, lng, el, z: 8 });
+  S.overlay.markers.push(marker);
+  return marker;
 }
 
 function showJourneyOnMap(d) {
@@ -1589,21 +1591,30 @@ function drawVehicleRoute(d) {
   // barva podle vybraného vozu (tramvaj, metro, vlak, autobus), jinak podle spoje
   const sel = S.vehicles.find((x) => vehicleUid(x) === S.selected);
   const vs = sel ? STYLES[vehicleStyle(sel)] : null;
-  const pl = S.map.addPolyline(d.shape || d.route, { color: vs ? routeOf(vs) : routeColor(d.trip), width: 10, arrows: true });
+  const route = d.shape || d.route;
+  const pl = S.map.addPolyline(route, { color: vs ? routeOf(vs) : routeColor(d.trip), width: 10, arrows: true });
   S.overlay.lines.push(pl);
+  const start = route.length ? pin(route[0][0], route[0][1], false) : null;
+  const end = route.length ? pin(route.at(-1)[0], route.at(-1)[1], true) : null;
   const gen = overlayGen;
   // tvar ze serveru už je nakreslený; jinak z shapes.bin, u autobusu bez tvaru po silnici přes OSRM
   (d.shape ? Promise.resolve(null) : S.shapes.points(d.trip.shp))
     .then((r) => r || (d.shape || d.trip.isTrain ? null : osrmRoute(d.route)))
-    .then((r) => { if (r && gen === overlayGen) pl.setPoints(r); });
+    .then((r) => {
+      if (!r || gen !== overlayGen) return;
+      pl.setPoints(r);
+      start?.setLatLng(r[0][0], r[0][1]);
+      end?.setLatLng(r.at(-1)[0], r.at(-1)[1]);
+    });
   // spoj z jízdního řádu webu: zastávky na nástupištích (jako ikony zastávek na mapě)
   const plat = d.tid && S.stopIdx ? S.stopIdx.platformPoints(d.stops.map((s) => s.id)) : null;
   d.stops.forEach((s, i) => {
     if (!s.has) return;
     const p = plat?.[i] || s;
     const isNext = i === d.nextIdx, isEnd = i === d.stops.length - 1;
-    if (i === 0 || isEnd) pin(p.lat, p.lng, isEnd);
-    else dot(p.lat, p.lng, `stopdot${isNext ? ' next' : ' mid'}`, isNext ? stopLabel(s.name) : null, isNext ? null : (vs ? routeOf(vs) : routeColor(d.trip)));
+    if ((i === 0 || isEnd) && !route.length) pin(p.lat, p.lng, isEnd);
+    else if (i === 0 || isEnd) return;
+    else if (!isNext) dot(p.lat, p.lng, 'stopdot mid', null, vs ? routeOf(vs) : routeColor(d.trip));
   });
   showRouteControls();
 }
