@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 globalThis.document = { createElement: () => ({ getContext: () => ({}) }) };
-const { STYLES, lateMinutes, vehicleStyle } = await import('../public/js/vehicle-layer.js');
+const { STYLES, lateMinutes, vehicleMode, vehicleStyle } = await import('../public/js/vehicle-layer.js');
 delete globalThis.document;
 
 test('trolejbus používá tyrkysovou barvu a při zpoždění autobusovou červenou s tyrkysovou trasou', () => {
@@ -18,4 +18,11 @@ test('trolejbus používá tyrkysovou barvu a při zpoždění autobusovou červ
     routeDark: '#4DB6AC',
   });
   assert.equal(lateMinutes(late), 0);
+});
+
+test('trolejbusy se rozpoznávají jen podle mode z API', () => {
+  assert.equal(vehicleStyle({ line: '70', source: 'dpmul', delay: 0 }), 'BUS');
+  assert.equal(vehicleStyle({ line: '70', source: 'dpmul', agency: 'Dopravní podnik města Ústí nad Labem', delay: 0 }), 'BUS');
+  assert.equal(vehicleMode({ mode: 'trolleybus' }), 'trolleybus');
+  assert.equal(vehicleStyle({ mode: 'trolleybus', line: '70', delay: 0 }), 'TROLLEYBUS');
 });

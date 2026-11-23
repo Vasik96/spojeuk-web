@@ -40,7 +40,7 @@ const SEL_RING = 'rgba(61, 157, 232, .55)';  // vybrané vozidlo: modrý krouže
 
 /** Druh dopravy: ze serveru (`mode`), u starších odpovědí odvozený z PID uid ("g0:…" tramvaj) a linek metra. */
 export function vehicleMode(v) {
-  if (v.mode) return v.mode === 'trolleybus' ? 'bus' : v.mode;
+  if (v.mode) return v.mode;
   if (v.train) return 'train';
   const m = /^g(\d+):/.exec(v.uid || '');
   if (m) return { 0: 'tram', 1: 'metro', 2: 'train', 4: 'ferry', 7: 'funicular' }[m[1]] || 'bus';
@@ -48,22 +48,8 @@ export function vehicleMode(v) {
   return 'bus';
 }
 
-/**
- * Trolejbusové linky DPMÚL (Ústí nad Labem): DPMÚL ani DÚK druh vozidla neposílají a jízdní řád ho nemá, proto pevný
- * seznam (denní 70–76, 80, 84, 87, 88, noční 43, 46). PID posílá mode = "trolleybus". Stejně jako v Android appce.
- */
-export const DPMUL_TROLLEYBUS_LINES = new Set(['70', '71', '72', '73', '74', '75', '76', '80', '84', '87', '88', '43', '46']);
-/** Linka dopravce agency je ústecký trolejbus (stejná čísla jinde, třeba v Teplicích, nejsou). */
-export const isDpmulTrolleybus = (line, agency) =>
-  DPMUL_TROLLEYBUS_LINES.has(String(line ?? '').trim()) && /Ústí nad Labem/.test(agency || '') && /Dopravní podnik/.test(agency || '');
-
 export function vehicleStyle(v) {
   if (v.mode === 'trolleybus') return v.delay > 3 ? 'TROLLEYBUS_LATE' : 'TROLLEYBUS';
-  // vozy DPMÚL (i když polohu dodává DÚK): trolejbusové linky podle seznamu
-  if (vehicleMode(v) === 'bus' && DPMUL_TROLLEYBUS_LINES.has(String(v.line ?? '').trim()) &&
-      (v.source === 'dpmul' || isDpmulTrolleybus(v.line, v.agency) || (v.source === 'duk' && (v.ids || []).some((x) => String(x).startsWith('dpmul:'))))) {
-    return v.delay > 3 ? 'TROLLEYBUS_LATE' : 'TROLLEYBUS';
-  }
   switch (vehicleMode(v)) {
     case 'train': return 'TRAIN';
     case 'tram': return 'TRAM';

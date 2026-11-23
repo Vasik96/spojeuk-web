@@ -5,7 +5,7 @@ import { Planner, describeJourney } from './planner.js';
 import { suggest, nearestPlaces } from './suggest.js';
 import { LiveTracker, fetchVehicles, sourceStatusParts, vehicleUid } from './live.js';
 import { MapView } from './gl-map.js';
-import { VehicleLayer, CATEGORIES, vehicleStyle, vehicleMode, lateMinutes, STYLES, LATE_COLOR, isDpmulTrolleybus } from './vehicle-layer.js';
+import { VehicleLayer, CATEGORIES, vehicleStyle, vehicleMode, lateMinutes, STYLES, LATE_COLOR } from './vehicle-layer.js';
 import { ShapeStore, legRoute, osrmRoute, footRoute, footDistances, WALK_M_PER_MIN } from './shapes.js';
 import { store } from './store.js';
 import { StopIndex, STOP_DEPARTURE_HOURS } from './stops.js';
@@ -632,7 +632,6 @@ function tripStyle(t) {
     if (l === 'A' || l === 'B' || l === 'C') return { st: STYLES[`METRO_${l}`], ic: 'metro' };
     if ((parseInt(l, 10) || 999) < 100) return { st: STYLES.TRAM, ic: 'tram' };
   }
-  if (isDpmulTrolleybus(t.line, t.agency)) return { st: STYLES.TROLLEYBUS, ic: 'bus' };
   return { st: STYLES.BUS, ic: 'bus' };
 }
 
