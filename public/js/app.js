@@ -1141,6 +1141,17 @@ function pin(lat, lng, to) {
   return marker;
 }
 
+function pinRouteEnds(points) {
+  if (!points?.length) return [];
+  return [pin(points[0][0], points[0][1], false), pin(points.at(-1)[0], points.at(-1)[1], true)];
+}
+
+function moveRouteEnds(markers, points) {
+  if (!points?.length) return;
+  markers[0]?.setLatLng(points[0][0], points[0][1]);
+  markers[1]?.setLatLng(points.at(-1)[0], points.at(-1)[1]);
+}
+
 function showJourneyOnMap(d) {
   clearOverlay(); closeSheet();
   const tt = S.tt;
@@ -1523,15 +1534,19 @@ function showDeparture(dep) {
   const line = pts.filter(Boolean).map((p) => [p.lat, p.lng]);
   const pl = S.map.addPolyline(line, { color: routeColor(t), width: 10, arrows: true });
   S.overlay.lines.push(pl);
+  const routeMarkers = pinRouteEnds(line);
   const gen = overlayGen;
   legRoute(S.shapes, tt, dep.tid, ids)
     .then((r) => r || (t.isTrain ? null : osrmRoute(line)))
-    .then((r) => { if (r && gen === overlayGen) pl.setPoints(r); });
+    .then((r) => {
+      if (!r || gen !== overlayGen) return;
+      pl.setPoints(r);
+      moveRouteEnds(routeMarkers, r);
+    });
   const real = pts.map((p, i) => [p, i]).filter(([p]) => p);
   real.forEach(([p, i], k) => {
     const name = prettyName(tt.stops[ids[i]].name);
-    if (k === 0 || k === real.length - 1) pin(p.lat, p.lng, k === real.length - 1);
-    else dot(p.lat, p.lng, `stopdot${ids[i] === dep.from ? '' : ' mid'}`, ids[i] === dep.from ? stopLabel(name) : null, routeColor(t));
+    if (k !== 0 && k !== real.length - 1) dot(p.lat, p.lng, `stopdot${ids[i] === dep.from ? '' : ' mid'}`, ids[i] === dep.from ? stopLabel(name) : null, routeColor(t));
   });
   showRouteControls();
   goMap();
@@ -1555,15 +1570,20 @@ async function showRemoteDeparture(dep) {
   if (!trip) { toast('Trasu spoje se nepodařilo načíst.'); return; }
   const pts = trip.stops.map((s, i) => trip.platforms?.[i] || (s[1] || s[2] ? [s[1], s[2]] : null));
   const line = pts.filter(Boolean);
-  const pl = S.map.addPolyline(trip.route && trip.route.length >= 2 ? trip.route : line, { color: routeColor(trip), width: 10, arrows: true });
+  const route = trip.route && trip.route.length >= 2 ? trip.route : line;
+  const pl = S.map.addPolyline(route, { color: routeColor(trip), width: 10, arrows: true });
   S.overlay.lines.push(pl);
-  if (!trip.route && !trip.isTrain) osrmRoute(line).then((r) => { if (r && gen === overlayGen) pl.setPoints(r); });
+  const routeMarkers = pinRouteEnds(route);
+  if (!trip.route && !trip.isTrain) osrmRoute(line).then((r) => {
+    if (!r || gen !== overlayGen) return;
+    pl.setPoints(r);
+    moveRouteEnds(routeMarkers, r);
+  });
   const real = pts.map((p, i) => [p, i]).filter(([p]) => p);
   const boardI = real.findIndex(([, i]) => trip.stops[i] && trip.stops[i][4] % 86400 === dep.dep % 86400);
   real.forEach(([p, i], k) => {
     const name = stopLabel(prettyName(trip.stops[i][0]));
-    if (k === 0 || k === real.length - 1) pin(p[0], p[1], k === real.length - 1);
-    else dot(p[0], p[1], `stopdot${k === boardI ? '' : ' mid'}`, k === boardI ? name : null, routeColor(trip));
+    if (k !== 0 && k !== real.length - 1) dot(p[0], p[1], `stopdot${k === boardI ? '' : ' mid'}`, k === boardI ? name : null, routeColor(trip));
   });
   showRouteControls();
   goMap();
@@ -1594,8 +1614,7 @@ function drawVehicleRoute(d) {
   const route = d.shape || d.route;
   const pl = S.map.addPolyline(route, { color: vs ? routeOf(vs) : routeColor(d.trip), width: 10, arrows: true });
   S.overlay.lines.push(pl);
-  const start = route.length ? pin(route[0][0], route[0][1], false) : null;
-  const end = route.length ? pin(route.at(-1)[0], route.at(-1)[1], true) : null;
+  const routeMarkers = pinRouteEnds(route);
   const gen = overlayGen;
   // tvar ze serveru už je nakreslený; jinak z shapes.bin, u autobusu bez tvaru po silnici přes OSRM
   (d.shape ? Promise.resolve(null) : S.shapes.points(d.trip.shp))
@@ -1603,8 +1622,7 @@ function drawVehicleRoute(d) {
     .then((r) => {
       if (!r || gen !== overlayGen) return;
       pl.setPoints(r);
-      start?.setLatLng(r[0][0], r[0][1]);
-      end?.setLatLng(r.at(-1)[0], r.at(-1)[1]);
+      moveRouteEnds(routeMarkers, r);
     });
   // spoj z jízdního řádu webu: zastávky na nástupištích (jako ikony zastávek na mapě)
   const plat = d.tid && S.stopIdx ? S.stopIdx.platformPoints(d.stops.map((s) => s.id)) : null;
@@ -1612,7 +1630,7 @@ function drawVehicleRoute(d) {
     if (!s.has) return;
     const p = plat?.[i] || s;
     const isNext = i === d.nextIdx, isEnd = i === d.stops.length - 1;
-    if ((i === 0 || isEnd) && !route.length) pin(p.lat, p.lng, isEnd);
+    if ((i === 0 || isEnd) && !routeMarkers.length) pin(p.lat, p.lng, isEnd);
     else if (i === 0 || isEnd) return;
     else if (!isNext) dot(p.lat, p.lng, 'stopdot mid', null, vs ? routeOf(vs) : routeColor(d.trip));
   });
