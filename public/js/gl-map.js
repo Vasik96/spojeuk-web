@@ -278,6 +278,11 @@ class GlLine {
     } catch { /* mapa už je zrušená */ }
   }
 
+  setColor(color) {
+    this.style.color = color;
+    try { if (this.view.map.getLayer(`${this.id}-line`)) this.view.map.setPaintProperty(`${this.id}-line`, 'line-color', color); } catch { /* mapa se načítá */ }
+  }
+
   setPoints(points) {
     this.points = points;
     const src = this.view.map.getSource?.(this.id);

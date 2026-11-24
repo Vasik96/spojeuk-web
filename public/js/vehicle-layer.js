@@ -31,6 +31,7 @@ export const STYLES = {
   METRO: { color: '#37474F', route: '#263238', routeDark: '#90A4AE' },
   FERRY: { color: '#1565C0', route: '#0D47A1', routeDark: '#64B5F6' },
   FUNICULAR: { color: '#6D4C41', route: '#4E342E', routeDark: '#A1887F' },
+  CHRISTMAS: { color: '#800000', route: '#800000', routeDark: '#EF5350' },  // vánoční vůz: tmavě červený „dárek“ se zlatou mašlí
 };
 export const LATE_COLOR = '#D32F2F';
 // krátké upozornění na vůz (po „Mapa“ u spojení na mobilu): barvy motivu (nastavuje app.js podle světlého / tmavého),
@@ -49,6 +50,11 @@ export function vehicleMode(v) {
 }
 
 export function vehicleStyle(v) {
+  return v.christmas ? 'CHRISTMAS' : baseStyle(v);
+}
+
+/** Styl podle druhu dopravy a zpoždění, bez vánočního přebarvení (kategorie, ikona, rámeček zpoždění). */
+export function baseStyle(v) {
   if (v.mode === 'trolleybus') return v.delay > 3 ? 'TROLLEYBUS_LATE' : 'TROLLEYBUS';
   switch (vehicleMode(v)) {
     case 'train': return 'TRAIN';
@@ -62,7 +68,7 @@ export function vehicleStyle(v) {
 
 /** Kategorie pro filtr na mapě (trolejbusy patří k autobusům). */
 export function vehicleCategory(v) {
-  const s = vehicleStyle(v);
+  const s = baseStyle(v);
   if (s === 'TRAIN') return 'train';
   if (s === 'TRAM') return 'tram';
   if (s.startsWith('METRO')) return 'metro';
@@ -77,7 +83,7 @@ export const CATEGORIES = [
 
 /** Zpoždění tramvaje / metra (u nich barva zpoždění neukazuje): červený rámeček kolem štítku / tečky. */
 export function lateMinutes(v) {
-  const s = vehicleStyle(v);
+  const s = baseStyle(v);
   return (s === 'TRAM' || s === 'TROLLEYBUS' || s.startsWith('METRO')) && v.delay > 3 ? Math.min(99, v.delay) : 0;
 }
 
@@ -126,8 +132,11 @@ function drawLabel(line, styleKey, phase, late, dpr, alpha = 1, target = null) {
   }
   const tw = meas.measureText(line).width;
   const pillW = Math.max(36, Math.ceil(tw + pad));
+  const xmas = styleKey === 'CHRISTMAS' && !hl;
   const ring = late && !hl ? 4 : 0;
-  const w = pillW + 2 * ring, h = hPx + 2 * ring;
+  // místo pro mašli nad štítkem; stejně tak dole, aby štítek zůstal na středu bitmapy (tj. na poloze vozu)
+  const xt = xmas ? 10 : 0;
+  const w = pillW + 2 * ring, h = hPx + 2 * ring + 2 * xt;
   let c;
   if (target) { c = target; c.width = Math.max(1, Math.ceil(w * dpr)); c.height = Math.max(1, Math.ceil(h * dpr)); }   // změna rozměru = čisté plátno
   else c = canvas(w * dpr, h * dpr);
@@ -135,12 +144,13 @@ function drawLabel(line, styleKey, phase, late, dpr, alpha = 1, target = null) {
   g.setTransform(1, 0, 0, 1, 0, 0);
   g.scale(dpr, dpr);
   g.globalAlpha = alpha;   // zastaralá poloha: poloprůhledný štítek (jako v appce)
-  if (ring) { g.fillStyle = LATE_COLOR; roundRect(g, 0, 0, w, h, h / 2); g.fill(); }
+  if (ring) { g.fillStyle = LATE_COLOR; roundRect(g, 0, xt, w, h - 2 * xt, (h - 2 * xt) / 2); g.fill(); }
   const stroke = hl ? 2.5 : 0;
   const ins = stroke / 2;
   g.fillStyle = hl ? HL.bg[phase - 1] : st.color;
-  roundRect(g, ring + ins, ring + ins, pillW - 2 * ins, hPx - 2 * ins, (hPx - 2 * ins) / 2);
+  roundRect(g, ring + ins, xt + ring + ins, pillW - 2 * ins, hPx - 2 * ins, (hPx - 2 * ins) / 2);
   g.fill();
+  if (xmas) drawBow(g, ring + pillW / 2, xt + ring + 0.5);
   if (hl) { g.strokeStyle = HL.stroke; g.lineWidth = stroke; g.stroke(); }
   g.fillStyle = hl ? HL.fg[phase - 1] : st.darkText ? '#000' : '#fff';
   g.font = font(size);
@@ -148,6 +158,30 @@ function drawLabel(line, styleKey, phase, late, dpr, alpha = 1, target = null) {
   g.textBaseline = 'middle';
   g.fillText(line, w / 2, h / 2 + size * 0.04);
   return { img: c, w, h };
+}
+
+/** Zlatá dárková mašle na horním okraji vánočního štítku (smyčky nahoru, stužky přes okraj; MapMarkers.kt v appce). */
+function drawBow(g, cx, ky) {
+  const gold = '#FFC107';
+  const side = (s) => {
+    g.beginPath();
+    g.moveTo(cx + s * 0.5, ky - 0.5);
+    g.bezierCurveTo(cx + s * 6, ky, cx + s * 13, ky - 2.5, cx + s * 10, ky - 7);
+    g.bezierCurveTo(cx + s * 7, ky - 8.5, cx + s * 2, ky - 4.5, cx + s * 0.5, ky - 0.5);
+    g.closePath();
+  };
+  const tail = (s) => {
+    g.beginPath();
+    g.moveTo(cx + s * 0.5, ky);
+    g.lineTo(cx + s * 7.5, ky + 6.5); g.lineTo(cx + s * 3.2, ky + 7.8); g.lineTo(cx - s * 0.5, ky + 1.2);
+    g.closePath();
+  };
+  g.save();
+  g.fillStyle = gold; g.strokeStyle = gold; g.lineWidth = 3.2; g.lineCap = 'round'; g.lineJoin = 'round';
+  for (const s of [-1, 1]) { tail(s); g.fill(); }
+  for (const s of [-1, 1]) { side(s); g.stroke(); }
+  g.beginPath(); g.arc(cx, ky - 1.2, 3.5, 0, Math.PI * 2); g.fill();
+  g.restore();
 }
 
 /** Vybrané vozidlo: běžný štítek zvětšený o 20 % s modrým kroužkem kolem (jako dřívější DOM značka .veh.sel). */
@@ -159,7 +193,9 @@ function drawSelected(line, styleKey, late, dpr) {
   const g = c.getContext('2d');
   g.scale(dpr, dpr);
   g.fillStyle = SEL_RING;
-  roundRect(g, 0, 0, w, h, h / 2); g.fill();
+  // vánoční štítek má nad a pod sebou rezervu na mašli: kroužek se kreslí jen kolem štítku, mašle z něj přesahuje
+  const xt = styleKey === 'CHRISTMAS' ? 10 * 1.2 : 0;
+  roundRect(g, 0, xt, w, h - 2 * xt, (h - 2 * xt) / 2); g.fill();
   g.shadowColor = 'rgba(0,0,0,.4)'; g.shadowBlur = 8; g.shadowOffsetY = 2;
   g.drawImage(base.img, ring, ring, w - 2 * ring, h - 2 * ring);
   return { img: c, w, h };
@@ -546,6 +582,7 @@ export class VehicleLayer {
       if (uid === this.selected || uid === this.flash) continue;   // vybrané kreslí canvas
       list.push(it);
     }
+    list.sort((a, b) => (a.style === 'CHRISTMAS') - (b.style === 'CHRISTMAS'));   // vánoční vozy se kreslí poslední = nad ostatními (stabilní řazení)
     const now = performance.now();
     const ox = (this._ox = this.map.getCenter ? wxOf(this.map.getCenter().lng) : 0.5);
     const oy = (this._oy = wyOf(this.map.getCenter().lat));

@@ -5,7 +5,7 @@ import { Planner, describeJourney } from './planner.js';
 import { suggest, nearestPlaces } from './suggest.js';
 import { LiveTracker, fetchVehicles, sourceStatusParts, vehicleUid, travelHeading } from './live.js';
 import { MapView } from './gl-map.js';
-import { VehicleLayer, CATEGORIES, vehicleStyle, vehicleMode, lateMinutes, STYLES, LATE_COLOR } from './vehicle-layer.js';
+import { VehicleLayer, CATEGORIES, vehicleStyle, baseStyle, vehicleMode, lateMinutes, STYLES, LATE_COLOR } from './vehicle-layer.js';
 import { ShapeStore, legRoute, osrmRoute, footRoute, footDistances, WALK_M_PER_MIN } from './shapes.js';
 import { store } from './store.js';
 import { StopIndex, STOP_DEPARTURE_HOURS } from './stops.js';
@@ -63,7 +63,7 @@ const S = {
   journeys: [], desc: new Map(), expanded: new Set(), query: null, loadingMore: false, noMoreEarlier: false,
   loc: null, vehicles: [], vlayer: null, selected: null, flashUid: null,
   stopIdx: null, slayer: null, stopSel: null, stopTimer: 0,   // zastávky na mapě a otevřený panel odjezdů
-  overlay: { lines: [], markers: [] }, meMarker: null,
+  overlay: { lines: [], markers: [], dots: [] }, meMarker: null,
   arrive: false,             // zvolený čas je příjezd ("chci tam být do"), ne odjezd
   detail: null,              // spojení otevřené v detailu (popis z describeJourney)
   collapsed: new Set(),      // sbalené mezizastávky v detailu (index jízdy)
@@ -296,7 +296,7 @@ function vehicleTerminal(v) {
 }
 
 /** Druh vozidla v jednotném čísle; trolejbus podle `mode` ze serveru (na mapě patří k autobusům). */
-const kindOf = (v) => (vehicleStyle(v).startsWith('TROLLEYBUS') ? 'trolleybus' : vehicleMode(v));
+const kindOf = (v) => (baseStyle(v).startsWith('TROLLEYBUS') ? 'trolleybus' : vehicleMode(v));
 
 /** Víc vozidel pod prstem (třeba dva vlaky v jedné stanici): výběr ze seznamu. */
 function chooseVehicle(hits) {
@@ -1110,7 +1110,7 @@ function clearOverlay() {
   overlayGen++;
   activeLiveRoute = null;
   S.overlay.lines.forEach((l) => l.remove()); S.overlay.markers.forEach((m) => m.remove());
-  S.overlay = { lines: [], markers: [] };
+  S.overlay = { lines: [], markers: [], dots: [] };
   hideEl($('#clear-route'), { y: -8 });
   hideEl($('#clear-route-icon'), { y: 8, scale: .8 });
 }
@@ -1126,10 +1126,24 @@ function dot(lat, lng, cls, label, color = null) {
   if (color) el.style.borderColor = color;   // zastávky na trase v barvě druhu dopravy
   const m = S.map.addMarker({ lat, lng, el, z: 5 });
   S.overlay.markers.push(m);
+  S.overlay.dots.push(el);
   if (label) {
     const l = document.createElement('div'); l.className = 'stop-label'; l.textContent = label;
     S.overlay.markers.push(S.map.addMarker({ lat, lng, el: l, z: 6 }));
   }
+  return el;
+}
+
+/**
+ * Vánoční vůz na trase spoje: barva trasy z jízdního řádu o něm nic neví (je to jen příznak živého vozu), takže jakmile
+ * se vánoční vůz najde, přebije se barva trasy (a zastávek na ní) jeho červenou, jako focusedTripVehicle v appce.
+ * [tid] omezí přebarvení na jednu jízdu spojení (u odjezdu ze zastávky bez omezení).
+ */
+function recolorForChristmas(live, tid = null) {
+  if (!live?.christmas) return;
+  const color = routeOf(STYLES.CHRISTMAS);
+  for (const l of S.overlay.lines) if (l.tid == null || tid == null || l.tid === tid) l.setColor?.(color);
+  for (const el of S.overlay.dots) if (el.dataset.tid === undefined || tid == null || +el.dataset.tid === tid) el.style.borderColor = color;
 }
 
 function pin(lat, lng, to) {
@@ -1174,19 +1188,20 @@ function showJourneyOnMap(d) {
     const lp = legPoints(l);
     const line = lp.filter(Boolean).map((p) => [p.lat, p.lng]);
     const pl = S.map.addPolyline(line, { color: routeColor(t), width: 10, arrows: true });
+    pl.tid = l.tid;
     S.overlay.lines.push(pl);
     // přesná trasa po silnici/trati nahradí rovnou čáru, jakmile se načte
     const gen = overlayGen;
     legRoute(S.shapes, tt, l.tid, l.stops.map((x) => x.stop))
       .then((r) => r || (t.isTrain ? null : osrmRoute(line)))
       .then((r) => { if (r && gen === overlayGen) pl.setPoints(r); });
-    lp.slice(1, -1).forEach((p) => { if (p) dot(p.lat, p.lng, 'stopdot mid', null, routeColor(t)); });
+    lp.slice(1, -1).forEach((p) => { if (p) dot(p.lat, p.lng, 'stopdot mid', null, routeColor(t)).dataset.tid = l.tid; });
     allPts.push(...line);
   });
   // přestupy, začátek a konec (na nástupišti své jízdy)
   const rideLegs = d.legs.filter((l) => l.kind !== 'walk');
   const at = (l, idx) => legPoints(l).at(idx);
-  rideLegs.slice(0, -1).forEach((l) => { const p = at(l, -1), s = sp(l.stops.at(-1).stop); if (p) dot(p.lat, p.lng, 'stopdot', stopLabel(prettyName(s.name)), routeColor(tt.trips[l.tid])); });
+  rideLegs.slice(0, -1).forEach((l) => { const p = at(l, -1), s = sp(l.stops.at(-1).stop); if (p) dot(p.lat, p.lng, 'stopdot', stopLabel(prettyName(s.name)), routeColor(tt.trips[l.tid])).dataset.tid = l.tid; });
   const fp = rideLegs.length ? at(rideLegs[0], 0) : null, lpEnd = rideLegs.length ? at(rideLegs.at(-1), -1) : null;
   if (fp) pin(fp.lat, fp.lng, false);
   if (lpEnd) pin(lpEnd.lat, lpEnd.lng, true);
@@ -1213,6 +1228,7 @@ function focusLive(d, routePts = []) {
   const live = S.live.vehicleForJourney?.(d)?.v;
   const liveUid = live && S.vehicles.some((x) => vehicleUid(x) === vehicleUid(live)) ? vehicleUid(live) : null;
   if (activeLiveRoute?.d === d) activeLiveRoute.key = liveUid ? `${liveUid}|${live?.heading ?? 'none'}` : 'none';
+  if (liveUid) recolorForChristmas(live, d.rides?.[0]?.tid ?? null);
   if (!liveUid) {
     // dřív tlačítko „nic neudělalo“: když vůz spoje teď nevidíme, aspoň to řekneme
     setTimeout(() => toast('Vůz tohoto spoje teď na mapě nevidíme, ukazuji jen trasu.'), 250);
@@ -1414,7 +1430,7 @@ function renderSheet() {
   const idLine = v.id ? `ID vozidla: ${esc(vehicleSource(v) + ':' + v.id)}` : tripRef ? `Spoj: ${esc(tripRef)}` : 'ID vozidla: není dostupné';
   $('#sheet-body').innerHTML = `
     <h3>Informace o spoji</h3>
-    <span class="big-badge" style="background:${st.color};color:${st.darkText ? '#000' : '#fff'};${ring}">${icon(MODE_ICON[kindOf(v)] || 'bus')}${esc(v.line)}</span>
+    <span class="big-badges"><span class="big-badge" style="background:${st.color};color:${st.darkText ? '#000' : '#fff'};${ring}">${icon(MODE_ICON[kindOf(v)] || 'bus')}${esc(v.line)}</span>${v.christmas ? `<span class="big-badge xmas">${icon('tree')}Vánoční vůz</span>` : ''}</span>
     <p class="age" style="margin-top:.7rem">${idLine}</p>
     ${!v.id && mode === 'metro' ? '<p class="age">Metro nehlásí číslo soupravy, vůz se sleduje podle spoje.</p>' : ''}
     <p class="age">Zdroj polohy: ${esc(sourceLabel(v))}</p>
@@ -1606,7 +1622,7 @@ async function showRemoteDeparture(dep) {
   cands.sort((a, b) => distanceM(a.lat, a.lng, board[0], board[1]) - distanceM(b.lat, b.lng, board[0], board[1]));
   const live = cands[0];
   if (!live) setTimeout(() => toast('Vůz tohoto spoje teď na mapě nevidíme, ukazuji jen trasu.'), 250);
-  else focusUid(vehicleUid(live));
+  else { recolorForChristmas(live); focusUid(vehicleUid(live)); }
 }
 
 function drawVehicleRoute(d) {

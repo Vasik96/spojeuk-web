@@ -14,6 +14,7 @@
   <symbol id="arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
   <symbol id="arrow-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
   <symbol id="walk" viewBox="0 0 24 24"><circle cx="13" cy="4.5" r="1.6"/><path d="M9.5 21l2.3-6.5L9.5 12l1.6-4.6 3.6 2.4 2.1 3.2M7.5 12.5l2-4.3"/><path d="m13.8 14.6 2.2 3.4 1 3"/></symbol>
+  <symbol id="tree" viewBox="0 0 24 24"><path d="M12 3 6.5 10h3L5.5 16h13l-4-6h3z"/><path d="M12 16v5"/></symbol>
   <symbol id="snow" viewBox="0 0 24 24"><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9"/><path d="m9.5 4.5 2.5 2 2.5-2M9.5 19.5l2.5-2 2.5 2"/></symbol>
   <symbol id="access" viewBox="0 0 24 24"><circle cx="12" cy="4.5" r="1.6"/><path d="M12 8.5v5h4.5l2 5"/><path d="M8.6 11.2A5.2 5.2 0 1 0 15.4 18"/></symbol>
   <symbol id="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
