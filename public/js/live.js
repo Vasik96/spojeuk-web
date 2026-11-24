@@ -11,6 +11,11 @@ const IMPLAUSIBLE = 10_000;
 const MAX_ROUTE_OFF_M = 150;     // trasa webu = přímky mezi zastávkami, proto víc než 50 m v appce
 const MAX_APPROACH_M = 8_000;
 const MAX_HEADING_DIFF = 70;
+// směr jízdy a držení přiřazení (jako HeadingTracker a TripLocator v appce)
+const MIN_TRAIL_M = 15, PROGRESS_EPS_M = 5;
+const WRONG_DIRECTION_PENALTY = 500, RIGHT_DIRECTION_BONUS = 60, HEADING_MISMATCH_PENALTY = 300;
+const STICKY_BONUS = 150, STICKY_MS = 10 * 60_000, STICKY_MAX = 6000;
+const TRACK_MIN_MOVE_M = 20, TRACK_STEP_M = 8, TRACK_JUMP_M = 800, TRACK_KEEP_M = 300, TRACK_POINTS = 12;
 
 const bearing = (la1, lo1, la2, lo2) => {
   const r = Math.PI / 180, y = Math.sin((lo2 - lo1) * r) * Math.cos(la2 * r);
@@ -19,6 +24,12 @@ const bearing = (la1, lo1, la2, lo2) => {
 };
 const angleDiff = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
 const usableHeading = (h) => Number.isFinite(h) && h !== 0;
+
+/**
+ * Směr jízdy vozu pro párování: azimut ze zdroje, kromě DPMÚL (jeho „azimut“ míří k nejbližší zastávce, ne po
+ * směru jízdy), jinak směr z posunu polohy (v.moveHeading).
+ */
+export const travelHeading = (v) => (v.source !== 'dpmul' && usableHeading(v.heading) ? v.heading : usableHeading(v.moveHeading) ? v.moveHeading : null);
 
 export async function fetchVehicles() {
   const res = await fetch(`${CONFIG.API_BASE}/api/vehicles`, { cache: 'no-store' });
@@ -58,6 +69,8 @@ export class LiveTracker {
     this.byTrip = new Map(); // "cis:trip" nebo číslo vlaku → vozidlo (pro zpoždění ve výsledcích)
     this.vehicles = [];
     this.matchCache = new Map();   // uid → { at, line, tid } (párování podle polohy je dražší, drží se chvíli)
+    this.motion = new Map();       // uid → { pts, heading, trail, seen }: historie poloh pro směr jízdy
+    this.sticky = new Map();       // uid → { tid, line, at }: spoj přiřazený podle polohy se drží (jinak by se odhad mohl při každém dotazu změnit)
   }
 
   lineIndex() {
@@ -73,10 +86,51 @@ export class LiveTracker {
   }
 
   /**
+   * Sleduje pohyb vozu: v.moveHeading = směr z posledního pohybu (lokálně, ne tětiva přes zatáčku) a v.trail =
+   * [lat, lng] bodu aspoň ~20 m za vozem, z něhož se pozná směr po trase spoje.
+   */
+  trackMotion(v, nowMs = Date.now()) {
+    const uid = v.uid || vehicleUid(v);
+    let st = this.motion.get(uid);
+    if (!st) { st = { pts: [], heading: null, trail: null, seen: 0 }; this.motion.set(uid, st); }
+    st.seen = nowMs;
+    const d = (p) => distanceM(p[0], p[1], v.lat, v.lng);
+    if (st.pts.length && d(st.pts[st.pts.length - 1]) > TRACK_JUMP_M) { st.pts = []; st.heading = null; st.trail = null; }
+    if (!st.pts.length || d(st.pts[st.pts.length - 1]) >= TRACK_STEP_M) {
+      st.pts.push([v.lat, v.lng]);
+      if (st.pts.length > TRACK_POINTS) st.pts.shift();
+    }
+    let anchor = null;
+    for (let i = st.pts.length - 1; i >= 0; i--) if (d(st.pts[i]) >= TRACK_MIN_MOVE_M) { anchor = st.pts[i]; break; }
+    if (anchor) {
+      st.heading = bearing(anchor[0], anchor[1], v.lat, v.lng) || 0.1;   // přesně 0 by se bralo jako „neznámý“
+      st.trail = anchor;
+    } else if (st.trail && d(st.trail) > TRACK_KEEP_M) st.trail = null;
+    v.moveHeading = st.heading;
+    v.trail = st.trail;
+  }
+
+  /** Spoj, který byl vozu naposledy přiřazen podle polohy (stejná linka, ne starší než 10 min). */
+  stickyTid(v, nowMs = Date.now()) {
+    const s = this.sticky.get(v.uid || vehicleUid(v));
+    return s && s.line === v.line && nowMs - s.at < STICKY_MS ? s.tid : null;
+  }
+
+  /**
    * Spoj vozidla podle linky, polohy na úseku mezi zastávkami, času (po odečtení zpoždění), směru jízdy a cíle.
    * Pro zdroje bez čísla spoje (DPMÚL), jako TripLocator.matchByPosition v appce.
    */
   matchByPosition(v, now = pragueNow()) {
+    const prefer = this.stickyTid(v);
+    const best = this._matchByPosition(v, now, prefer);
+    if (best != null) {
+      if (this.sticky.size > STICKY_MAX) this.sticky.clear();
+      this.sticky.set(v.uid || vehicleUid(v), { tid: best, line: v.line, at: Date.now() });
+    }
+    return best;
+  }
+
+  _matchByPosition(v, now, prefer) {
     const tt = this.tt;
     const ids = this.lineIndex().get(normLine(v.line));
     if (!ids) return null;
@@ -110,9 +164,23 @@ export class LiveTracker {
           if (cost < score) { score = cost; legHeading = bearing(a.lat, a.lng, b.lat, b.lng); }
         }
         if (score === Infinity) continue;
-        if (usableHeading(v.heading) && !Number.isNaN(legHeading) && angleDiff(v.heading, legHeading) > 90) continue;
         const h = foldText(t.head);
         if (wanted && h) { if (h.includes(wanted) || wanted.includes(h)) score -= 250; else continue; }
+        // směr jízdy: nejdřív podle postupu po trase spoje (nezávisí na zatáčkách, protisměrný spoj má postup opačný);
+        // úhel úsečky mezi zastávkami se od skutečného směru v oblouku liší o 90° i víc, proto je to jen penalizace
+        let dirKnown = false;
+        if (v.trail && distanceM(v.trail[0], v.trail[1], v.lat, v.lng) >= MIN_TRAIL_M) {
+          const poly = this.poly(tid);
+          const a0 = progressAlong(poly, v.trail[0], v.trail[1]), a1 = progressAlong(poly, v.lat, v.lng);
+          if (a0 && a1) {
+            const moved = a1.pos - a0.pos;
+            if (moved < -PROGRESS_EPS_M) { score += WRONG_DIRECTION_PENALTY; dirKnown = true; }
+            else if (moved > PROGRESS_EPS_M) { score -= RIGHT_DIRECTION_BONUS; dirKnown = true; }
+          }
+        }
+        const hd = travelHeading(v);
+        if (!dirKnown && hd != null && !Number.isNaN(legHeading) && angleDiff(hd, legHeading) > 90) score += HEADING_MISMATCH_PENALTY;
+        if (tid === prefer) score -= STICKY_BONUS;
         if (score < bestScore) { bestScore = score; best = tid; }
       }
     }
@@ -131,6 +199,9 @@ export class LiveTracker {
     if (v._tid) return { tid: v._tid, exact: !!v._exact };
     const exact = v.train ? tt.findTrainTripId(v.cis) : tt.findTripId(v.cis, v.trip);
     if (exact) return { tid: exact, exact: true };
+    // odhad podle polohy: stejné přiřazení jako na mapě (drží se), jinak by trasa po kliknutí mohla být jiná
+    const byPos = !v.train ? this.matchByPosition(v, now) : null;
+    if (byPos) return { tid: byPos, exact: false };
     const near = tt.nearestOnLine(v.line, v.lat, v.lng, now);
     return near ? { tid: near, exact: false } : null;
   }
@@ -157,7 +228,9 @@ export class LiveTracker {
   update(vehicles) {
     this.byTrip.clear();
     this.vehicles = vehicles;
-    for (const v of vehicles) this.enrich(v);
+    const nowMs0 = Date.now();
+    for (const v of vehicles) { this.trackMotion(v, nowMs0); this.enrich(v); }
+    if (this.motion.size > 3000) for (const [k, s] of this.motion) if (nowMs0 - s.seen > 10 * 60_000) this.motion.delete(k);
     // spoj vozidla (_tid): přesně podle čísla spoje / vlaku, jinak (DPMÚL) podle polohy v oblasti jízdního řádu webu
     const tt = this.tt, now = pragueNow(), nowMs = Date.now();
     for (const v of vehicles) {
@@ -165,7 +238,7 @@ export class LiveTracker {
       const exact = v.train ? tt.findTrainTripId(v.cis) : v.cis && v.cis !== '000000' && v.trip ? tt.findTripId(v.cis, v.trip) : null;
       if (exact) { v._tid = exact; v._exact = true; continue; }
       if (v.train || v.lat < REGION.s || v.lat > REGION.n || v.lng < REGION.w || v.lng > REGION.e) continue;
-      const key = [v.line, v.lat.toFixed(3), v.lng.toFixed(3), Math.round(v.delay || 0), foldText(v.dest || ''), usableHeading(v.heading) ? v.heading : null].join('|');
+      const key = [v.line, v.lat.toFixed(3), v.lng.toFixed(3), Math.round(v.delay || 0), foldText(v.dest || ''), travelHeading(v) != null ? Math.round(travelHeading(v) / 15) : null].join('|');
       const c = this.matchCache.get(v.uid);
       if (c && c.key === key && nowMs - c.at < MATCH_TTL_MS) { v._tid = c.tid; continue; }
       v._tid = this.matchByPosition(v, now);

@@ -3,7 +3,7 @@ import { CONFIG } from './config.js';
 import { loadTimetable } from './timetable.js';
 import { Planner, describeJourney } from './planner.js';
 import { suggest, nearestPlaces } from './suggest.js';
-import { LiveTracker, fetchVehicles, sourceStatusParts, vehicleUid } from './live.js';
+import { LiveTracker, fetchVehicles, sourceStatusParts, vehicleUid, travelHeading } from './live.js';
 import { MapView } from './gl-map.js';
 import { VehicleLayer, CATEGORIES, vehicleStyle, vehicleMode, lateMinutes, STYLES, LATE_COLOR } from './vehicle-layer.js';
 import { ShapeStore, legRoute, osrmRoute, footRoute, footDistances, WALK_M_PER_MIN } from './shapes.js';
@@ -1452,7 +1452,10 @@ async function fetchRemoteTrip(v) {
     line: v.line ?? '', lat: v.lat, lng: v.lng, delay: v.delay || 0, dest: v.dest || '', mode: vehicleMode(v),
     train: v.train ? '1' : '0', num: v.train ? v.cis || '' : '',
   });
-  if (v.heading != null) q.set('heading', v.heading);
+  const hd = travelHeading(v);
+  if (hd != null) q.set('heading', hd);
+  if (v.trail) { q.set('tlat', v.trail[0]); q.set('tlng', v.trail[1]); }
+  if (v.uid) q.set('uid', v.uid);
   if (v.source === 'pmdp' && v.trip) q.set('pmdp', v.trip);
   let data = prev?.data || null;
   try {
