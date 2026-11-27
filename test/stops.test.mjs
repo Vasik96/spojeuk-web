@@ -28,16 +28,23 @@ test('zastávky v Ústí: počty nástupišť jako ve skutečnosti (stejně jako
   }
 });
 
-test('Hlavní nádraží: jedno autobusové nástupiště a vlaky zvlášť, obojí s odjezdy', () => {
+test('Hlavní nádraží: autobusy (nejvýš nástupiště pro každý směr) a vlaky zvlášť, obojí s odjezdy', () => {
   const hn = icons('Hlavní nádraží');
   const rail = hn.filter((s) => s.kind === 'rail'), bus = hn.filter((s) => s.kind !== 'rail');
   assert.equal(rail.length, 1);
-  assert.equal(bus.length, 1);
+  // od listopadu 2026 staví linky 85, 450, 451 a 801 i ve směru do centra (sloupek u Čajkovského): 1–2 nástupiště
+  assert.ok(bus.length >= 1 && bus.length <= 2, `autobusových nástupišť: ${bus.length}`);
   const now = { day: DAY, sec: 8 * 3600 };
   const trains = idx.departures(rail[0], now);
   assert.ok(trains.length > 5 && trains.every((d) => d.isTrain), `vlaků: ${trains.length}`);
-  const buses = idx.departures(bus[0], now);
-  assert.ok(buses.length > 10 && buses.every((d) => !d.isTrain), `autobusů: ${buses.length}`);
+  const buses = bus.map((b) => idx.departures(b, now));
+  assert.ok(buses.every((l) => l.length > 0 && l.every((d) => !d.isTrain)), 'nástupiště bez odjezdů nebo s vlakem');
+  assert.ok(Math.max(...buses.map((l) => l.length)) > 10, `autobusů: ${buses.map((l) => l.length)}`);
+  // nástupiště nesdílejí odjezdy
+  if (buses.length === 2) {
+    const a = new Set(buses[0].map((d) => `${d.tid}|${d.dep}`));
+    assert.ok(buses[1].every((d) => !a.has(`${d.tid}|${d.dep}`)), 'stejný odjezd na obou nástupištích');
+  }
 });
 
 test('každé nástupiště má odjezdy a dvě nástupiště zastávky odjezdy nesdílí', () => {

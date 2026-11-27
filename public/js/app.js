@@ -1200,6 +1200,9 @@ function moveRouteEnds(markers, points) {
   markers[1]?.setLatLng(points.at(-1)[0], points.at(-1)[1]);
 }
 
+/** Pěší přesun na mapě: fialový jako v appce (ve světlém motivu tmavší, v tmavém světlejší odstín). */
+const walkColor = () => (resolvedTheme() === 'dark' ? '#CE93D8' : '#8E24AA');
+
 function showJourneyOnMap(d) {
   clearOverlay(); closeSheet();
   const tt = S.tt;
@@ -1209,7 +1212,7 @@ function showJourneyOnMap(d) {
     if (l.kind === 'walk') {
       const a = sp(l.from), b = sp(l.to);
       if (a.hasCoords && b.hasCoords) {
-        const wl = S.map.addPolyline([[a.lat, a.lng], [b.lat, b.lng]], { color: '#6a829b', width: 4, dash: '2 8', casing: null });
+        const wl = S.map.addPolyline([[a.lat, a.lng], [b.lat, b.lng]], { color: walkColor(), width: 4, dash: '2 8', casing: null });
         S.overlay.lines.push(wl);
         // pěší přesun po chodnících místo rovné čáry, jakmile ho pěší OSRM vrátí
         const gen = overlayGen;

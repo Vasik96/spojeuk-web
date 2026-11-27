@@ -104,7 +104,8 @@ function csaEarliest(net, srcs, dsts, t0) {
   const foot = tt.foot;
   const origin = new Set(srcs);
   const first = new Float64Array(N).fill(INF);  // nástup bez povinného přestupu (jen z počátku)
-  for (const s of srcs) { first[s] = t0; arrive[s] = t0; for (const [n, d] of foot[s] || []) { first[n] = Math.min(first[n], t0 + d); arrive[n] = Math.min(arrive[n], t0 + d); } }
+  // pěšky z počátku jen k nástupu: plánovač hledá spojení s jízdou, cesta celá pěšky (sousední zastávka) se nepočítá
+  for (const s of srcs) { first[s] = t0; for (const [n, d] of foot[s] || []) first[n] = Math.min(first[n], t0 + d); }
   const on = new Set();
   for (const [dep, arr, from, to, trip] of conns) {
     if (!on.has(trip) && (first[from] <= dep || ready[from] <= dep)) on.add(trip);
