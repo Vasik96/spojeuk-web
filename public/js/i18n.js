@@ -1,31 +1,23 @@
-// Jazyk webu (čeština / angličtina). Volba je v localStorage ('auto' = podle prohlížeče); změna jazyka stránku
-// načte znovu, takže se všechno vykreslí v novém jazyce. Mimo prohlížeč (Node: server, testy) je vždy čeština.
+// Jazyk webu (čeština / angličtina). Výchozí je čeština; volba angličtiny se ukládá do localStorage a změna
+// jazyka stránku načte znovu, takže se všechno vykreslí v novém jazyce. Mimo prohlížeč (Node: server, testy) je vždy čeština.
 
 const NS = 'spojeuk:';
 const LANGS = ['cs', 'en'];
 
 function readPref() {
-  try { const v = JSON.parse(localStorage.getItem(NS + 'lang')); return LANGS.includes(v) ? v : 'auto'; } catch { return 'auto'; }
+  try { const v = JSON.parse(localStorage.getItem(NS + 'lang')); return LANGS.includes(v) ? v : 'cs'; } catch { return 'cs'; }
 }
 
 function detect() {
-  if (typeof document === 'undefined' || typeof navigator === 'undefined') return 'cs';
-  const pref = readPref();
-  if (pref !== 'auto') return pref;
-  const list = navigator.languages?.length ? navigator.languages : [navigator.language || 'cs'];
-  for (const l of list) {
-    const base = String(l).toLowerCase().split('-')[0];
-    if (base === 'cs' || base === 'sk') return 'cs';
-    if (base === 'en') return 'en';
-  }
-  return 'en';
+  if (typeof document === 'undefined') return 'cs';
+  return readPref();
 }
 
 export const LANG = detect();
 /** Locale pro toLocaleString / Intl. */
 export const LOCALE = LANG === 'en' ? 'en-GB' : 'cs-CZ';
 
-/** Uložená volba ('auto' | 'cs' | 'en'). */
+/** Uložená volba ('cs' | 'en'). */
 export const langPref = readPref;
 export function setLangPref(v) {
   try { localStorage.setItem(NS + 'lang', JSON.stringify(v)); } catch { /* ignore */ }
@@ -45,7 +37,7 @@ const DICT = {
     'theme.auto': 'automaticky', 'theme.light': 'světlý', 'theme.dark': 'tmavý',
     'lang': 'Jazyk',
     'lang.aria': 'Jazyk: {name}. Klepnutím změníš.',
-    'lang.auto': 'podle prohlížeče', 'lang.cs': 'čeština', 'lang.en': 'angličtina',
+    'lang.cs': 'čeština', 'lang.en': 'angličtina',
     'loading.tt': 'Načítám jízdní řády…',
     'loading.download': 'Stahuji jízdní řády…',
     'loading.prepare': 'Připravuji vyhledávání…',
@@ -219,7 +211,7 @@ const DICT = {
     'theme.auto': 'automatic', 'theme.light': 'light', 'theme.dark': 'dark',
     'lang': 'Language',
     'lang.aria': 'Language: {name}. Tap to change.',
-    'lang.auto': 'browser default', 'lang.cs': 'Czech', 'lang.en': 'English',
+    'lang.cs': 'Czech', 'lang.en': 'English',
     'loading.tt': 'Loading timetables…',
     'loading.download': 'Downloading timetables…',
     'loading.prepare': 'Preparing search…',

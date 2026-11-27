@@ -110,17 +110,16 @@ function applyHighlightColors() {
 }
 
 // ───────────── jazyk ─────────────
-/** Tlačítko jazyka: podle prohlížeče → čeština → angličtina; změna stránku načte znovu. */
+/** Tlačítko jazyka: čeština ↔ angličtina; změna stránku načte znovu. */
 function setupLang() {
   const b = $('#lang-btn');
-  const order = ['auto', 'cs', 'en'];
   const pref = langPref();
   $('#lang-code').textContent = LANG.toUpperCase();
-  const name = pref === 'auto' ? `${t('lang.auto')} (${t(`lang.${LANG}`)})` : t(`lang.${pref}`);
+  const name = t(`lang.${pref}`);
   b.setAttribute('aria-label', t('lang.aria', { name }));
   b.title = `${t('lang')}: ${name}`;
   b.addEventListener('click', () => {
-    setLangPref(order[(order.indexOf(pref) + 1) % order.length]);
+    setLangPref(pref === 'cs' ? 'en' : 'cs');
     location.reload();
   });
 }
