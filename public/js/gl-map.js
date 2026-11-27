@@ -9,6 +9,14 @@ const ml = () => window.maplibregl;
 const EMPTY = (bg) => ({ version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': bg } }] });
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
+const CFG_KEY = 'spojeuk:mapCfg';
+function readCachedConfig() {
+  try { const c = JSON.parse(localStorage.getItem(CFG_KEY)); return c && c.light && c.dark ? c : null; } catch { return null; }
+}
+function writeCachedConfig(c) {
+  try { localStorage.setItem(CFG_KEY, JSON.stringify(c)); } catch { /* ignore */ }
+}
+
 /**
  * Šipka směru jízdy jako v Android appce (routeArrowBitmap): široký chevron, který přesahuje z trasy.
  * Tvar je z appky (mřížka 72, otočený tak, aby mířil doprava = ve směru čáry), výplň bílá, obrys jen jemně černý.
@@ -55,6 +63,9 @@ export class MapView {
       minZoom: this.opts.minZoom, maxZoom: this.opts.maxZoom,
       dragRotate: false, pitchWithRotate: false, attributionControl: false, renderWorldCopies: false,
       fadeDuration: 200,
+      // Telefony s hustotou 3× by kreslily 9× víc pixelů než 1×; 2× je na oko stejně ostré a GPU má o ~45 % méně
+      // práce (plynulejší zoom a posun). Vrstva vozidel bere stejnou hodnotu (map.getPixelRatio()).
+      pixelRatio: Math.min(2, window.devicePixelRatio || 1),
       // plynulejší kolečko myši (výchozí je dost skokové)
       scrollZoom: true,
     });
@@ -69,19 +80,28 @@ export class MapView {
     this.map.on('data', (e) => { if (e.dataType === 'source' && e.tile) this._tilesOk++; });
     this.map.on('error', (e) => this._onError(e));
     this._frame = this._frame.bind(this);
-    requestAnimationFrame(this._frame);
+    this._looping = false;
+    // Konfigurace stylu (adresy CARTO) z minula: styl se začne stahovat hned, ne až po odpovědi /api/map-config.
+    // Čerstvá se načte na pozadí; když se liší (jiný klíč, výpadek CARTO), styl se přepne.
+    this.cfg = readCachedConfig();
     this._applyStyle(this.theme);
+    loadMapConfig(this.opts.configUrl).then((fresh) => {
+      if (!fresh || this._dead) return;
+      const changed = JSON.stringify(fresh) !== JSON.stringify(this.cfg);
+      writeCachedConfig(fresh);
+      if (changed) { this.cfg = fresh; this._applyStyle(this.theme); }
+    });
   }
 
   // ───────────── styl ─────────────
 
   async _applyStyle(theme, useFallback = false) {
-    const seq = ++this._seq;
-    this.cfg ||= await loadMapConfig(this.opts.configUrl);
-    if (seq !== this._seq) return;
+    ++this._seq;
     const cfg = this.cfg;
-    const url = cfg && (useFallback ? cfg.fallback?.[theme] : cfg[theme]);
+    if (!cfg) return;   // první návštěva: styl se nastaví, až přijde /api/map-config
+    const url = useFallback ? cfg.fallback?.[theme] : cfg[theme];
     if (!url) { this._warn(); return; }
+    if (url === this._styleUrl && !useFallback === !this._usingFallback && this._styleOk) return;
     this._styleOk = false; this._styleUrl = url; this._usingFallback = useFallback;
     const recolor = useFallback || cfg.provider !== 'carto';
     this.map.setStyle(url, {
@@ -174,11 +194,18 @@ export class MapView {
     this.el.append(box);
   }
 
-  /** Jedna smyčka na animaci značek (plynulý přesun vozidel mezi dvěma polohami). */
-  _frame(now) {
-    if (this._dead) return;
-    for (const m of this.markers) m._step(now);
+  /** Smyčka na animaci značek (plynulý přesun mezi dvěma polohami); běží jen, dokud se nějaká značka hýbe. */
+  _kick() {
+    if (this._looping || this._dead) return;
+    this._looping = true;
     requestAnimationFrame(this._frame);
+  }
+
+  _frame(now) {
+    if (this._dead) { this._looping = false; return; }
+    let busy = false;
+    for (const m of this.markers) if (m.anim) { m._step(now); busy ||= !!m.anim; }
+    if (busy) requestAnimationFrame(this._frame); else this._looping = false;
   }
 }
 
@@ -201,7 +228,7 @@ class GlMarker {
     if (lat === this.lat && lng === this.lng) return;
     this.anim = animate ? { fromLat: this.dLat, fromLng: this.dLng, t0: performance.now(), dur: 1200 } : null;
     this.lat = lat; this.lng = lng;
-    if (!animate) { this.dLat = lat; this.dLng = lng; this.marker.setLngLat([lng, lat]); }
+    if (!animate) { this.dLat = lat; this.dLng = lng; this.marker.setLngLat([lng, lat]); } else this.view._kick();
   }
 
   setZ(z) { this.root.style.zIndex = z; }

@@ -309,7 +309,7 @@ export class VehicleLayer {
     this.rects = new Map();      // klíč štítku → místo v atlasu
     this.visible = true;
     this._base = performance.now();
-    this._dpr = Math.min(3, window.devicePixelRatio || 1);
+    this._dpr = this._mapDpr();
     this._rebuild = true;
     this._back = null;           // rozestavěný nový atlas (při zaplnění), viz _upload
     this._visMissing = 0;        // vozidla v záběru, jejichž štítek ještě není v atlasu
@@ -323,7 +323,9 @@ export class VehicleLayer {
     map.on('resize', () => this._resize());
     map.on('render', () => this._drawSelected());   // vybrané vozidlo ve stejném snímku jako mapa
     map.on('click', (e) => this._click(e));
-    map.on('mousemove', (e) => { map.getCanvas().style.cursor = this.hitTest(e.point.x, e.point.y).length ? 'pointer' : ''; });
+    // kurzor nad vozidlem řeší app.js (spolu se zastávkami, jen když se mapa nehýbe)
+    // po dojetí pohybu přepočítat počet vozidel v záběru (během pohybu se počítá jen občas, viz _render)
+    map.on('moveend', () => { this._camKey = null; map.triggerRepaint(); });
     // vlastní vrstvu po výměně stylu (motiv) MapLibre zahodí: přidá se znovu (GL prostředky se vytvoří v onAdd)
     map.on('style.load', () => this._addLayer());
     this.fade.initDotMode(map.getZoom() < DOT_ZOOM);
@@ -635,14 +637,18 @@ export class VehicleLayer {
     this._upload(gl);
     if (this._rebuild) this._build(gl);
 
-    // režim podle zoomu a počtu vozidel v záběru (s hysterezí); počítá se jen při změně kamery nebo dat
+    // Režim podle zoomu a počtu vozidel v záběru (s hysterezí). Počet je potřeba jen od zoomu štítků výš (pod ním
+    // jsou vždy tečky) a během pohybu mapy stačí jednou za ~120 ms: dřív se při každém snímku zoomu / posunu
+    // procházely všechny vozy (v Praze ~3 000) a pro každý se volalo getBounds().getSouth()… (4 volání na vůz).
     const map = this.map, zoom = map.getZoom();
-    const camKey = `${zoom.toFixed(3)}|${map.getCenter().lng.toFixed(5)}|${map.getCenter().lat.toFixed(5)}|${this.w}x${this.h}`;
-    if (camKey !== this._camKey) {
-      this._camKey = camKey;
+    if (zoom >= DOT_ZOOM && this._camKey !== null && now - (this._countAt || 0) > 120) this._camKey = undefined;
+    if (zoom >= DOT_ZOOM && !this._camKey) {
+      this._camKey = 1;
+      this._countAt = now;
       const b = map.getBounds();
+      const s = b.getSouth(), n0 = b.getNorth(), w = b.getWest(), e = b.getEast();
       let n = 0;
-      for (const it of this.drawn || []) { const v = it.v; if (v.lat >= b.getSouth() && v.lat <= b.getNorth() && v.lng >= b.getWest() && v.lng <= b.getEast()) n++; }
+      for (const it of this.drawn || []) { const v = it.v; if (v.lat >= s && v.lat <= n0 && v.lng >= w && v.lng <= e) n++; }
       this._nVis = n;
     }
     const dotNow = this.fade.dotMode;
@@ -694,9 +700,12 @@ export class VehicleLayer {
 
   // ───── štítky dopředu (mimo snímek mapy) ─────
 
+  /** Hustota pixelů mapy (MapLibre ji omezuje na 2×, viz gl-map.js): štítky a canvas stejně, ať sedí na pixely. */
+  _mapDpr() { return this.map.getPixelRatio?.() || Math.min(2, window.devicePixelRatio || 1); }
+
   _resize() {
     const r = this.map.getContainer().getBoundingClientRect();
-    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const dpr = this._mapDpr();
     if (dpr !== this._dpr) {
       this._dpr = dpr; this.selBmp.clear();
       if (this.gl) { this._atlasReset(); for (const it of this.items.values()) this.queue.add(it.key); }
@@ -743,13 +752,16 @@ export class VehicleLayer {
 
   _drawSelected() {
     const g = this.g, dpr = this._dpr;
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, this.w, this.h);
-    this._hl = null;
-    if (!this.visible) return;
-    const uid = this.flash || this.selected;
+    const uid = this.visible ? this.flash || this.selected : null;
     const it = uid && this.items.get(uid);
-    if (!it || (this.filter && !this.filter.has(it.cat))) return;
+    const show = it && !(this.filter && !this.filter.has(it.cat));
+    // Canvas přes celou mapu se maže, jen když na něm něco je: smazání ho označí ke složení na obrazovku znovu
+    // a dřív se to dělo v každém snímku zoomu / posunu, i když nic vybrané nebylo.
+    if (this._hlDrawn) { g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, this.w, this.h); this._hlDrawn = false; }
+    this._hl = null;
+    if (!show) return;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this._hlDrawn = true;
     const now = performance.now();
     const p = this.map.project(this.position(uid));
     const flash = uid === this.flash;

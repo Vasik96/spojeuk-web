@@ -64,11 +64,28 @@ const pragueFmt = new Intl.DateTimeFormat('en-GB', {
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
 });
 
-/** Aktuální pražský čas: { day: "20261109", sec: sekundy od půlnoci }. */
-export function pragueNow(ms = Date.now()) {
+/** Pražský čas přes Intl (pomalé: ~10 µs); jen pro výpočet posunu zóny. */
+function pragueParts(ms) {
   const p = {};
   for (const { type, value } of pragueFmt.formatToParts(new Date(ms))) p[type] = value;
-  return { day: `${p.year}${p.month}${p.day}`, sec: (+p.hour) * 3600 + (+p.minute) * 60 + (+p.second) };
+  return p;
+}
+
+// Posun pražského času od UTC platí vždy celou hodinu UTC (letní čas se přepíná na celou hodinu), takže se Intl
+// volá nejvýš jednou za hodinu. Dřív se volal pro každé vozidlo v každé dávce poloh (tisíckrát za pár sekund).
+let tzFrom = 0, tzUntil = -1, tzOffset = 0;
+
+/** Aktuální pražský čas: { day: "20261109", sec: sekundy od půlnoci }. */
+export function pragueNow(ms = Date.now()) {
+  if (ms < tzFrom || ms >= tzUntil) {
+    const hour = Math.floor(ms / 3_600_000) * 3_600_000;
+    const p = pragueParts(hour);
+    tzOffset = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - hour;
+    tzFrom = hour; tzUntil = hour + 3_600_000;
+  }
+  const d = new Date(ms + tzOffset);
+  const day = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
+  return { day, sec: d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds() };
 }
 
 /** "20261109" → UTC timestamp půlnoci (jen pro počítání dnů, nezávisí na časové zóně uživatele). */

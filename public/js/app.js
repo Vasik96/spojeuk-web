@@ -206,10 +206,20 @@ function initMap() {
     if (st) { openStop(st); return; }
     if (S.selected || S.stopSel) closeSheet();
   });
-  S.map.on('mousemove', (e) => {
-    const overVehicle = S.vlayer.hitTest(e.point.x, e.point.y).length > 0;
-    const overStop = !!S.slayer?.hitTest(e.point.x, e.point.y);
-    S.map.map.getCanvas().style.cursor = overVehicle || overStop ? 'pointer' : '';
+  // kurzor nad vozidlem / zastávkou: nejvýš jednou za snímek a ne během tažení / zoomu (dřív se při každém pohybu
+  // myši procházela všechna vozidla a promítaly všechny zastávky v záběru, i když se mapa zrovna táhla)
+  let hoverPt = null, hoverRaf = 0;
+  S.map.map.on('mousemove', (e) => {
+    hoverPt = e.originalEvent?.buttons ? null : e.point;
+    if (hoverRaf) return;
+    hoverRaf = requestAnimationFrame(() => {
+      hoverRaf = 0;
+      const m = S.map.map;
+      if (!hoverPt || m.isMoving()) return;
+      const over = S.vlayer.hitTest(hoverPt.x, hoverPt.y).length > 0 || !!S.slayer?.hitTest(hoverPt.x, hoverPt.y);
+      const cur = over ? 'pointer' : '';
+      if (m.getCanvas().style.cursor !== cur) m.getCanvas().style.cursor = cur;
+    });
   });
   setupFilter();
 }
@@ -1783,11 +1793,16 @@ async function boot() {
   S.planner = new Planner(S.tt);
   S.live = new LiveTracker(S.tt);
   S.index = S.tt.placeIndex();
-  // zastávky na mapě (nástupiště podle míst a směru jízdy, jako v appce)
-  try {
-    S.stopIdx = new StopIndex(S.tt);
-    S.slayer = new StopLayer(S.map.map, S.stopIdx);
-  } catch (e) { console.warn('zastávky na mapě', e); }
+  // Zastávky na mapě (nástupiště podle míst a směru jízdy, jako v appce). Stavba indexu je nejdražší krok startu
+  // (~0,1 s na počítači, na telefonu několikrát víc) a dřív blokovala zpracování stylu mapy: postaví se až po
+  // prvním vykreslení mapy, v nečinnosti prohlížeče.
+  afterMapSettled(() => {
+    try {
+      S.stopIdx = new StopIndex(S.tt);
+      S.slayer = new StopLayer(S.map.map, S.stopIdx);
+    } catch (e) { console.warn('zastávky na mapě', e); }
+    refreshNearby();
+  });
   $('#loading').hidden = true;
   $('#search-form').hidden = false;
   setupForm();
@@ -1802,6 +1817,20 @@ async function boot() {
   autoLocate();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
+/** Spustí fn, až je mapa poprvé vykreslená (nebo nejpozději po 2,5 s) a prohlížeč má volno. */
+function afterMapSettled(fn) {
+  let done = false;
+  const run = () => {
+    if (done) return;
+    done = true;
+    (window.requestIdleCallback || ((f) => setTimeout(f, 1)))(() => fn(), { timeout: 800 });
+  };
+  const m = S.map?.map;
+  if (!m || (m.loaded() && m.areTilesLoaded())) return run();
+  m.once('idle', run);
+  setTimeout(run, 2500);
+}
+
 function pollVehiclesSafe() { S.live = { update() {}, forTrip() {}, detail: () => ({ trip: null }) }; pollVehicles(); }
 
 /**

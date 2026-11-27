@@ -117,10 +117,11 @@ export class Timetable {
 
   _nearestInTime(candidates, now = pragueNow()) {
     let best = null, bestGap = Infinity;
+    // dnešní a včerejší aktivní služby: volá se pro každé vozidlo v dávce poloh, den se mění jednou za den
+    if (this._ntDay !== now.day) { this._ntDay = now.day; this._ntActive = [this.activeSvcs(now.day), this.activeSvcs(addDays(now.day, -1))]; }
     for (let back = 0; back <= 1; back++) {
-      const day = addDays(now.day, -back);
       const rel = now.sec + back * 86400;
-      const active = this.activeSvcs(day);
+      const active = this._ntActive[back];
       for (const tid of candidates) {
         const t = this.trips[tid];
         if (!active.has(t.svc)) continue;
