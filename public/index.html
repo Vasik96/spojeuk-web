@@ -24,15 +24,16 @@
 
   <aside class="panel" id="panel">
     <header class="top">
-      <a class="brand" href="/" aria-label="Spoje UK – úvodní stránka">
+      <a class="brand" href="/" aria-label="Spoje UK – úvodní stránka" data-i18n-attr="aria-label:brand.home">
         <img src="/assets/logo.svg" alt="" width="40" height="40">
-        <span><strong>Spoje UK</strong><small>Doprava Ústeckého kraje</small></span>
+        <span><strong>Spoje UK</strong><small data-i18n="brand.sub">Doprava Ústeckého kraje</small></span>
       </a>
       <div class="top-actions">
-        <button class="icon-btn" id="info-btn" type="button" aria-label="O aplikaci" title="O aplikaci" aria-haspopup="dialog">
+        <button class="icon-btn" id="info-btn" type="button" aria-label="O aplikaci" title="O aplikaci" aria-haspopup="dialog" data-i18n-attr="aria-label:about;title:about">
           <svg class="icon"><use href="/assets/icons.svg#info"/></svg>
         </button>
-        <button class="icon-btn" id="theme-btn" type="button" aria-label="Vzhled: automaticky" title="Vzhled">
+        <button class="icon-btn lang-btn" id="lang-btn" type="button" aria-label="Jazyk" title="Jazyk" data-i18n-attr="title:lang"><span id="lang-code">CS</span></button>
+        <button class="icon-btn" id="theme-btn" type="button" aria-label="Vzhled: automaticky" title="Vzhled" data-i18n-attr="title:theme">
           <svg class="icon"><use href="/assets/icons.svg#auto"/></svg>
         </button>
       </div>
@@ -41,81 +42,81 @@
     <div class="scroll" id="scroll">
       <div class="loading" id="loading" role="status">
         <div class="spinner" aria-hidden="true"></div>
-        <p id="loading-text">Načítám jízdní řády…</p>
+        <p id="loading-text" data-i18n="loading.tt">Načítám jízdní řády…</p>
       </div>
 
       <form class="search card" id="search-form" autocomplete="off" hidden>
         <div class="field" data-field="from">
-          <label for="from-input">Odkud</label>
+          <label for="from-input" data-i18n="from">Odkud</label>
           <div class="input-wrap">
             <svg class="icon lead"><use href="/assets/icons.svg#pin"/></svg>
-            <input id="from-input" type="text" role="combobox" aria-expanded="false" aria-controls="from-list" aria-autocomplete="list" enterkeyhint="next" placeholder="Zastávka nebo stanice" autocapitalize="off" spellcheck="false">
-            <button type="button" class="mini" data-action="locate" aria-label="Použít moji polohu" title="Moje poloha"><svg class="icon"><use href="/assets/icons.svg#locate"/></svg></button>
-            <button type="button" class="mini" data-action="clear" aria-label="Vymazat" hidden><svg class="icon"><use href="/assets/icons.svg#x"/></svg></button>
+            <input id="from-input" type="text" role="combobox" aria-expanded="false" aria-controls="from-list" aria-autocomplete="list" enterkeyhint="next" placeholder="Zastávka nebo stanice" data-i18n-attr="placeholder:stop.placeholder" autocapitalize="off" spellcheck="false">
+            <button type="button" class="mini" data-action="locate" aria-label="Použít moji polohu" title="Moje poloha" data-i18n-attr="aria-label:locate.aria;title:locate"><svg class="icon"><use href="/assets/icons.svg#locate"/></svg></button>
+            <button type="button" class="mini" data-action="clear" aria-label="Vymazat" data-i18n-attr="aria-label:clear" hidden><svg class="icon"><use href="/assets/icons.svg#x"/></svg></button>
           </div>
           <ul class="suggest" id="from-list" role="listbox" hidden></ul>
         </div>
 
         <div class="swap-row">
           <span class="rule"></span>
-          <button type="button" class="swap" id="swap" aria-label="Prohodit odkud a kam"><svg class="icon"><use href="/assets/icons.svg#swap"/></svg></button>
+          <button type="button" class="swap" id="swap" aria-label="Prohodit odkud a kam" data-i18n-attr="aria-label:swap"><svg class="icon"><use href="/assets/icons.svg#swap"/></svg></button>
           <span class="rule"></span>
         </div>
 
         <div class="field" data-field="to">
-          <label for="to-input">Kam</label>
+          <label for="to-input" data-i18n="to">Kam</label>
           <div class="input-wrap">
             <svg class="icon lead"><use href="/assets/icons.svg#map"/></svg>
-            <input id="to-input" type="text" role="combobox" aria-expanded="false" aria-controls="to-list" aria-autocomplete="list" enterkeyhint="search" placeholder="Zastávka nebo stanice" autocapitalize="off" spellcheck="false">
-            <button type="button" class="mini" data-action="clear" aria-label="Vymazat" hidden><svg class="icon"><use href="/assets/icons.svg#x"/></svg></button>
+            <input id="to-input" type="text" role="combobox" aria-expanded="false" aria-controls="to-list" aria-autocomplete="list" enterkeyhint="search" placeholder="Zastávka nebo stanice" data-i18n-attr="placeholder:stop.placeholder" autocapitalize="off" spellcheck="false">
+            <button type="button" class="mini" data-action="clear" aria-label="Vymazat" data-i18n-attr="aria-label:clear" hidden><svg class="icon"><use href="/assets/icons.svg#x"/></svg></button>
           </div>
           <ul class="suggest" id="to-list" role="listbox" hidden></ul>
         </div>
 
         <div class="opts">
-          <div class="seg" role="radiogroup" aria-label="Kdy">
-            <button type="button" role="radio" aria-checked="true" data-when="now">Teď</button>
-            <button type="button" role="radio" aria-checked="false" data-when="custom">Jindy</button>
+          <div class="seg" role="radiogroup" aria-label="Kdy" data-i18n-attr="aria-label:when">
+            <button type="button" role="radio" aria-checked="true" data-when="now" data-i18n="when.now">Teď</button>
+            <button type="button" role="radio" aria-checked="false" data-when="custom" data-i18n="when.custom">Jindy</button>
           </div>
-          <button type="button" class="cat-btn" id="mode-btn" aria-haspopup="dialog"><svg class="icon"><use href="/assets/icons.svg#layers"/></svg><span id="mode-label">Všechny druhy</span><span class="cat-dots" id="mode-dots"></span><svg class="icon chev"><use href="/assets/icons.svg#chevron"/></svg></button>
+          <button type="button" class="cat-btn" id="mode-btn" aria-haspopup="dialog"><svg class="icon"><use href="/assets/icons.svg#layers"/></svg><span id="mode-label" data-i18n="modes.all">Všechny druhy</span><span class="cat-dots" id="mode-dots"></span><svg class="icon chev"><use href="/assets/icons.svg#chevron"/></svg></button>
         </div>
         <div class="when-wrap" id="when" hidden>
-          <div class="seg seg-wide" role="radiogroup" aria-label="Zvolený čas je">
-            <button type="button" role="radio" aria-checked="true" data-arrive="0">Odjezd</button>
-            <button type="button" role="radio" aria-checked="false" data-arrive="1">Příjezd</button>
+          <div class="seg seg-wide" role="radiogroup" aria-label="Zvolený čas je" data-i18n-attr="aria-label:when.is">
+            <button type="button" role="radio" aria-checked="true" data-arrive="0" data-i18n="departure">Odjezd</button>
+            <button type="button" role="radio" aria-checked="false" data-arrive="1" data-i18n="arrival">Příjezd</button>
           </div>
           <div class="when">
-            <label>Datum <input type="date" id="date-input"></label>
-            <label><span id="time-label">Čas odjezdu</span> <input type="time" id="time-input"></label>
+            <label><span data-i18n="date">Datum</span> <input type="date" id="date-input"></label>
+            <label><span id="time-label" data-i18n="time.dep">Čas odjezdu</span> <input type="time" id="time-input"></label>
           </div>
         </div>
 
-        <button class="btn btn-primary go" type="submit"><svg class="icon"><use href="/assets/icons.svg#search"/></svg>Najít spojení</button>
+        <button class="btn btn-primary go" type="submit"><svg class="icon"><use href="/assets/icons.svg#search"/></svg><span data-i18n="search">Najít spojení</span></button>
         <p class="form-msg" id="form-msg" role="alert" hidden></p>
       </form>
 
       <section class="nearby card" id="nearby" hidden aria-labelledby="nearby-title"></section>
 
-      <section class="trips" id="trips" aria-label="Oblíbená a nedávná spojení"></section>
+      <section class="trips" id="trips" aria-label="Oblíbená a nedávná spojení" data-i18n-attr="aria-label:trips.aria"></section>
 
       <footer class="legal">
-        <p>Svobodný open-source projekt (licence MIT), není spojený s žádným dopravcem, organizátorem dopravy ani jinou organizací. Data mohou být neúplná nebo zpožděná, na kritické cesty se spoléhej na oficiální zdroje.</p>
-        <p><button type="button" class="link-btn" id="about-btn">O projektu</button> · <a href="https://github.com/Vasik96/spojeuk" rel="noopener">GitHub</a> · <span id="data-info"></span></p>
+        <p data-i18n="legal">Svobodný open-source projekt (licence MIT), není spojený s žádným dopravcem, organizátorem dopravy ani jinou organizací. Data mohou být neúplná nebo zpožděná, na kritické cesty se spoléhej na oficiální zdroje.</p>
+        <p><button type="button" class="link-btn" id="about-btn" data-i18n="aboutProject">O projektu</button> · <a href="https://github.com/Vasik96/spojeuk" rel="noopener">GitHub</a> · <span id="data-info"></span></p>
       </footer>
     </div>
 
     <!-- výsledky hledání: podobrazovka přes hlavní (zpět = formulář s historií) -->
-    <section class="subview" id="results-view" hidden aria-label="Výsledky hledání">
+    <section class="subview" id="results-view" hidden aria-label="Výsledky hledání" data-i18n-attr="aria-label:results">
       <header class="sub-top">
-        <button type="button" class="icon-btn flat" data-back aria-label="Zpět"><svg class="icon"><use href="/assets/icons.svg#arrow-left"/></svg></button>
+        <button type="button" class="icon-btn flat" data-back aria-label="Zpět" data-i18n-attr="aria-label:back"><svg class="icon"><use href="/assets/icons.svg#arrow-left"/></svg></button>
         <div class="sub-title"><strong id="res-title"></strong><small id="res-sub"></small></div>
-        <button type="button" class="link-btn" id="earlier"><svg class="icon"><use href="/assets/icons.svg#arrow-up"/></svg>Dřívější</button>
+        <button type="button" class="link-btn" id="earlier"><svg class="icon"><use href="/assets/icons.svg#arrow-up"/></svg><span data-i18n="earlier">Dřívější</span></button>
       </header>
       <div class="scroll" id="res-scroll">
         <section class="results" id="results" aria-live="polite">
           <ol class="journeys" id="journeys"></ol>
           <div class="more" id="more">
-            <button type="button" class="btn btn-soft" id="later">Zobrazit další spoje</button>
+            <button type="button" class="btn btn-soft" id="later" data-i18n="later">Zobrazit další spoje</button>
           </div>
         </section>
         <section class="empty" id="empty" hidden></section>
@@ -123,78 +124,78 @@
     </section>
 
     <!-- detail spojení: všechny zastávky, živá zpoždění, vozy -->
-    <section class="subview" id="detail-view" hidden aria-label="Detail spojení">
+    <section class="subview" id="detail-view" hidden aria-label="Detail spojení" data-i18n-attr="aria-label:detail">
       <header class="sub-top">
-        <button type="button" class="icon-btn flat" data-back aria-label="Zpět"><svg class="icon"><use href="/assets/icons.svg#arrow-left"/></svg></button>
-        <div class="sub-title"><strong>Detail spojení</strong><small id="det-sub"></small></div>
+        <button type="button" class="icon-btn flat" data-back aria-label="Zpět" data-i18n-attr="aria-label:back"><svg class="icon"><use href="/assets/icons.svg#arrow-left"/></svg></button>
+        <div class="sub-title"><strong data-i18n="detail">Detail spojení</strong><small id="det-sub"></small></div>
       </header>
       <div class="scroll" id="det-scroll"></div>
     </section>
   </aside>
 
-  <main class="mapwrap" id="mapwrap" aria-label="Mapa vozidel">
+  <main class="mapwrap" id="mapwrap" aria-label="Mapa vozidel" data-i18n-attr="aria-label:map.aria">
     <div id="map"></div>
 
     <div class="chip status" id="status" role="status">
       <svg class="icon"><use href="/assets/icons.svg#map"/></svg>
-      <span><strong>Mapa vozidel</strong><small id="status-sub">Načítám polohy…</small><small id="source-status" class="source-label" hidden></small></span>
+      <span><strong data-i18n="map.title">Mapa vozidel</strong><small id="status-sub" data-i18n="map.loading">Načítám polohy…</small><small id="source-status" class="source-label" hidden></small></span>
     </div>
     <div class="chip warn" id="outage" hidden role="alert"><svg class="icon"><use href="/assets/icons.svg#alert"/></svg><span></span></div>
-    <button class="chip clear-route" id="clear-route" type="button" hidden><svg class="icon"><use href="/assets/icons.svg#x"/></svg>Zrušit zobrazení trasy</button>
-    <button class="route-dismiss" id="clear-route-icon" type="button" aria-label="Zrušit zobrazení trasy" title="Zrušit zobrazení trasy" hidden><svg class="icon"><use href="/assets/icons.svg#x"/></svg></button>
-    <button class="fab" id="fab-locate" type="button" aria-label="Moje poloha na mapě" title="Moje poloha"><svg class="icon"><use href="/assets/icons.svg#locate"/></svg></button>
-    <button class="fab fab-filter" id="filter-btn" type="button" title="Co zobrazit na mapě"><svg class="icon"><use href="/assets/icons.svg#layers"/></svg><span class="fab-count" id="filter-count" hidden></span></button>
+    <button class="chip clear-route" id="clear-route" type="button" hidden><svg class="icon"><use href="/assets/icons.svg#x"/></svg><span data-i18n="route.clear">Zrušit zobrazení trasy</span></button>
+    <button class="route-dismiss" id="clear-route-icon" type="button" aria-label="Zrušit zobrazení trasy" title="Zrušit zobrazení trasy" data-i18n-attr="aria-label:route.clear;title:route.clear" hidden><svg class="icon"><use href="/assets/icons.svg#x"/></svg></button>
+    <button class="fab" id="fab-locate" type="button" aria-label="Moje poloha na mapě" title="Moje poloha" data-i18n-attr="aria-label:locate.map;title:locate"><svg class="icon"><use href="/assets/icons.svg#locate"/></svg></button>
+    <button class="fab fab-filter" id="filter-btn" type="button" title="Co zobrazit na mapě" data-i18n-attr="title:filter.title"><svg class="icon"><use href="/assets/icons.svg#layers"/></svg><span class="fab-count" id="filter-count" hidden></span></button>
 
-    <section class="sheet" id="sheet" hidden aria-label="Informace o spoji">
-      <button class="sheet-close" id="sheet-close" type="button" aria-label="Zavřít"><svg class="icon"><use href="/assets/icons.svg#x"/></svg></button>
+    <section class="sheet" id="sheet" hidden aria-label="Informace o spoji" data-i18n-attr="aria-label:sheet.aria">
+      <button class="sheet-close" id="sheet-close" type="button" aria-label="Zavřít" data-i18n-attr="aria-label:close"><svg class="icon"><use href="/assets/icons.svg#x"/></svg></button>
       <div id="sheet-body"></div>
     </section>
   </main>
 
-  <nav class="tabbar" aria-label="Hlavní navigace">
-    <button type="button" data-tab="search" aria-current="page"><span class="pill"><svg class="icon"><use href="/assets/icons.svg#bus"/></svg></span>Spoje</button>
-    <button type="button" data-tab="map"><span class="pill"><svg class="icon"><use href="/assets/icons.svg#map"/></svg></span>Mapa</button>
+  <nav class="tabbar" aria-label="Hlavní navigace" data-i18n-attr="aria-label:nav.aria">
+    <button type="button" data-tab="search" aria-current="page"><span class="pill"><svg class="icon"><use href="/assets/icons.svg#bus"/></svg></span><span data-i18n="tab.search">Spoje</span></button>
+    <button type="button" data-tab="map"><span class="pill"><svg class="icon"><use href="/assets/icons.svg#map"/></svg></span><span data-i18n="tab.map">Mapa</span></button>
   </nav>
 </div>
 
 <dialog class="welcome" id="welcome" aria-labelledby="welcome-title">
   <form method="dialog">
     <img src="/assets/logo.svg" alt="" width="64" height="64">
-    <h2 id="welcome-title">Vítej ve Spoje UK</h2>
-    <p class="lead">Spojení a živá mapa vozidel po Ústeckém kraji, ve webovém prohlížeči a na každém zařízení.</p>
+    <h2 id="welcome-title" data-i18n="welcome.title">Vítej ve Spoje UK</h2>
+    <p class="lead" data-i18n="welcome.lead">Spojení a živá mapa vozidel po Ústeckém kraji, ve webovém prohlížeči a na každém zařízení.</p>
     <ul class="welcome-list">
-      <li><svg class="icon"><use href="/assets/icons.svg#search"/></svg><span><strong>Hledání spojení</strong> s přestupy, funguje i offline.</span></li>
-      <li><svg class="icon"><use href="/assets/icons.svg#map"/></svg><span><strong>Živá mapa</strong> autobusů, tramvají a vlaků se zpožděním.</span></li>
-      <li><svg class="icon"><use href="/assets/icons.svg#bus"/></svg><span><strong>Přidej si na plochu</strong> z nabídky prohlížeče a otevírá se jako aplikace.</span></li>
+      <li><svg class="icon"><use href="/assets/icons.svg#search"/></svg><span data-i18n-html="welcome.search"><strong>Hledání spojení</strong> s přestupy, funguje i offline.</span></li>
+      <li><svg class="icon"><use href="/assets/icons.svg#map"/></svg><span data-i18n-html="welcome.map"><strong>Živá mapa</strong> autobusů, tramvají a vlaků se zpožděním.</span></li>
+      <li><svg class="icon"><use href="/assets/icons.svg#bus"/></svg><span data-i18n-html="welcome.install"><strong>Přidej si na plochu</strong> z nabídky prohlížeče a otevírá se jako aplikace.</span></li>
     </ul>
-    <p class="fine">Svobodný open-source projekt (licence MIT), není spojený s žádným dopravcem, organizátorem dopravy ani jinou organizací. Na kritické cesty se spoléhej na oficiální zdroje.</p>
-    <button class="btn btn-primary" value="ok" autofocus>Začít</button>
+    <p class="fine" data-i18n="legal.short">Svobodný open-source projekt (licence MIT), není spojený s žádným dopravcem, organizátorem dopravy ani jinou organizací. Na kritické cesty se spoléhej na oficiální zdroje.</p>
+    <button class="btn btn-primary" value="ok" autofocus data-i18n="welcome.start">Začít</button>
   </form>
 </dialog>
 
 <dialog class="mini-dlg" id="filter-dlg" aria-labelledby="filter-title">
   <form method="dialog">
-    <h2 id="filter-title">Co zobrazit na mapě</h2>
+    <h2 id="filter-title" data-i18n="filter.title">Co zobrazit na mapě</h2>
     <div id="filter-list" class="filter-list"></div>
-    <div class="dlg-actions"><button type="button" class="link-btn" id="filter-all">Vybrat vše</button><button class="btn btn-primary" value="ok">Hotovo</button></div>
+    <div class="dlg-actions"><button type="button" class="link-btn" id="filter-all" data-i18n="selectAll">Vybrat vše</button><button class="btn btn-primary" value="ok" data-i18n="done">Hotovo</button></div>
   </form>
 </dialog>
 
 <dialog class="mini-dlg" id="choose-dlg" aria-labelledby="choose-title">
   <form method="dialog">
-    <h2 id="choose-title">Které vozidlo?</h2>
+    <h2 id="choose-title" data-i18n="choose.title">Které vozidlo?</h2>
     <ul id="choose-list" class="choose-list"></ul>
-    <div class="dlg-actions"><button class="btn" value="cancel">Zrušit</button></div>
+    <div class="dlg-actions"><button class="btn" value="cancel" data-i18n="cancel">Zrušit</button></div>
   </form>
 </dialog>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<div class="toast snack" id="snack" role="status" aria-live="polite" hidden><span></span><button type="button" class="link-btn">Zpět</button></div>
+<div class="toast snack" id="snack" role="status" aria-live="polite" hidden><span></span><button type="button" class="link-btn" data-i18n="back">Zpět</button></div>
 
 <dialog class="mini-dlg leg-dlg" id="leg-dlg" aria-labelledby="leg-title">
   <form method="dialog">
     <div id="leg-body"></div>
-    <div class="dlg-actions"><button class="btn" value="cancel">Zavřít</button></div>
+    <div class="dlg-actions"><button class="btn" value="cancel" data-i18n="close">Zavřít</button></div>
   </form>
 </dialog>
 

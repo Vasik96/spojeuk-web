@@ -50,7 +50,10 @@ export const store = {
   setPinned(from, to, on) {
     const h = this.trips();
     let e = h.find((x) => x.from === from && x.to === to);
-    if (!e) { e = { from, to, at: Date.now(), pin: 0 }; h.push(e); }
+    if (!e) {
+      if (!on) return;   // odepnutí neexistující dvojice nemá zakládat záznam v historii
+      e = { from, to, at: Date.now(), pin: 0 }; h.push(e);
+    }
     e.pin = on ? Date.now() : 0;
     write('trips', h);
   },

@@ -1,5 +1,6 @@
 // Jízdní řád v paměti. Port Timetable.kt: zastávky, místa, spoje, kalendář, pěší přesuny.
 import { addDays, distanceM, foldText, normLine, pragueNow, weekday } from './util.js';
+import { t } from './i18n.js';
 
 export const FOOT_MAX_M = 250;   // max. pěší přesun mezi zastávkami (Config.kt)
 export const WALK_MS = 1.1;      // rychlost chůze v m/s
@@ -183,7 +184,7 @@ export class Timetable {
 /** Načte timetable.json (s ohledem na gzip od serveru) a vytvoří Timetable. */
 export async function loadTimetable(url = '/data/timetable.json', { onProgress } = {}) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Jízdní řády se nepodařilo načíst (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(t('loading.failedHttp', { status: res.status }));
   onProgress?.(0.5);
   const data = await res.json();
   onProgress?.(0.9);

@@ -1,4 +1,5 @@
 // Sdílené pomocné funkce (běží v prohlížeči i v Node). Port z Util.kt / Formatting.kt.
+import { t, tv } from './i18n.js';
 
 // ───────────── text ─────────────
 
@@ -28,14 +29,9 @@ export function normLine(s) {
   return /^\d+$/.test(t) ? String(parseInt(t, 10)) : foldText(t);
 }
 
-export function pluralTransfers(n) {
-  if (n === 0) return 'přímý spoj';
-  return `${n} ${n === 1 ? 'přestup' : n <= 4 ? 'přestupy' : 'přestupů'}`;
-}
-
-export function pluralStops(n) {
-  return `${n} ${n === 1 ? 'zastávka' : n >= 2 && n <= 4 ? 'zastávky' : 'zastávek'}`;
-}
+export const pluralTransfers = (n) => t('n.transfers', { n });
+export const pluralStops = (n) => t('n.stops', { n });
+export const pluralMidStops = (n) => t('n.midStops', { n });
 
 export const NBSP = ' ';
 
@@ -46,7 +42,7 @@ export function fmtMinutes(m) {
 }
 
 export function fmtDist(m) {
-  return m < 1000 ? `${Math.round(m)}${NBSP}m` : `${(m / 1000).toFixed(1).replace('.', ',')}${NBSP}km`;
+  return m < 1000 ? `${Math.round(m)}${NBSP}m` : `${(m / 1000).toFixed(1).replace('.', tv('decimal'))}${NBSP}km`;
 }
 
 function fmtAge(s) {
@@ -56,9 +52,9 @@ function fmtAge(s) {
 }
 
 export function ageLabel(s) {
-  if (s <= 10) return 'Aktuální poloha';
-  if (s <= 40) return `Poloha před ${fmtAge(s)}`;
-  return `Poloha stará ${fmtAge(s)}. Zdroj teď vozidlo nedodává.`;
+  if (s <= 10) return t('age.now');
+  if (s <= 40) return t('age.ago', { t: fmtAge(s) });
+  return t('age.old', { t: fmtAge(s) });
 }
 
 // ───────────── čas (vždy pražský) ─────────────
@@ -100,7 +96,7 @@ export function hhmm(sec) {
   return `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}`;
 }
 
-export const DAY_NAMES = ['pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota', 'neděle'];
+export const DAY_NAMES = tv('days');
 
 /** "20261109" → "9. 11." */
 export function fmtDayShort(day) {

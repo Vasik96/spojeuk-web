@@ -3,6 +3,7 @@
 // Plynulé přibližování, setrvačnost a gesta řeší MapLibre. Vozidla kreslí vehicle-layer.js do vlastního canvasu
 // (DOM značky jsou jen pro pár bodů trasy a polohu uživatele).
 import { loadMapConfig, softenDark } from './map-style.js';
+import { t } from './i18n.js';
 
 const ml = () => window.maplibregl;
 const EMPTY = (bg) => ({ version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': bg } }] });
@@ -169,7 +170,7 @@ export class MapView {
       b.addEventListener('click', fn);
       return b;
     };
-    box.append(mk('+', 'Přiblížit', () => this.zoomBy(1)), mk('−', 'Oddálit', () => this.zoomBy(-1)));
+    box.append(mk('+', t('zoomIn'), () => this.zoomBy(1)), mk('−', t('zoomOut'), () => this.zoomBy(-1)));
     this.el.append(box);
   }
 

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Timetable } from '../public/js/timetable.js';
 import { Planner, Net, MIN_TRANSFER, describeJourney, MODES } from '../public/js/planner.js';
-import { foldText, addDays, weekday, hhmm } from '../public/js/util.js';
+import { foldText, addDays, weekday, hhmm, pragueNow } from '../public/js/util.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataFile = path.join(root, 'public/data/timetable.json');
@@ -13,8 +13,20 @@ if (!fs.existsSync(dataFile)) throw new Error('Chybí public/data/timetable.json
 const tt = new Timetable(JSON.parse(fs.readFileSync(dataFile, 'utf8')));
 const planner = new Planner(tt);
 
-// pondělí, den s běžným provozem
-const DAY = (() => { let d = '20261109'; while (weekday(d) !== 0) d = addDays(d, 1); return d; })();
+// pondělí s běžným provozem, ve kterém data opravdu platí: z pondělků kolem dneška ten s nejvíc spoji
+// (pevné datum přestalo sedět, jakmile ho jízdní řády přestaly pokrývat, a test pak srovnával s poloprázdnou sítí)
+const DAY = (() => {
+  let d = addDays(pragueNow().day, -21);
+  while (weekday(d) !== 0) d = addDays(d, 1);
+  let best = d, bestN = -1;
+  for (let i = 0; i < 9; i++, d = addDays(d, 7)) {
+    const svcs = tt.activeSvcs(d);
+    let n = 0;
+    for (let tid = 1; tid < tt.trips.length; tid++) if (tt.trips[tid] && svcs.has(tt.trips[tid].svc)) n++;
+    if (n > bestN) { bestN = n; best = d; }
+  }
+  return best;
+})();
 
 const findPlace = (city, stop) => [...tt.places.keys()].find((p) => foldText(p).startsWith(foldText(`${city},${stop}`)));
 

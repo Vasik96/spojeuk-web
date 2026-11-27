@@ -1,6 +1,8 @@
 // Živá vozidla: stahování z API, přiřazení ke spoji z jízdního řádu, příští a konečná zastávka.
 import { CONFIG } from './config.js';
 import { distanceM, M_PER_DEG_LAT, M_PER_DEG_LNG, prettyName, pragueNow, addDays, dayDiff, foldText, normLine } from './util.js';
+import { t } from './i18n.js';
+import { learnLineKind } from './line-kinds.js';
 
 // párování vozidel bez čísla spoje (DPMÚL) podle polohy: port TripLocator.matchByPosition z Android appky
 const SCORE_LIMIT = 800;
@@ -43,7 +45,7 @@ export function sourceStatusParts(sources = []) {
   const active = sources.filter((s) => s.vehicles > 0 && s.health !== 'down');
   return active.length
     ? active.map((s) => ({ name: s.name, stale: s.health === 'stale' }))
-    : [{ name: 'žádný', stale: true }];
+    : [{ name: t('source.none'), stale: true }];
 }
 
 /** Vzdálenost bodu od začátku lomené čáry spoje (m) podél trasy. */
@@ -245,6 +247,12 @@ export class LiveTracker {
       this.matchCache.set(v.uid, { at: nowMs, key, tid: v._tid });
     }
     if (this.matchCache.size > 3000) this.matchCache.clear();
+    // druh linky (trolejbus, tramvaj…) ze serveru pro barvy odjezdů a tras z jízdního řádu (line-kinds.js)
+    for (const v of vehicles) {
+      if (!v._tid || !v.mode) continue;
+      const trip = tt.trips[v._tid];
+      if (trip && (v._exact || normLine(v.line) === normLine(trip.line))) learnLineKind(trip.agency, trip.line, v.mode);
+    }
     for (const v of vehicles) {
       if (v.train) { if (v.cis) this.byTrip.set(`train:${v.cis.replace(/^0+/, '')}`, v); }
       else if (v.cis !== '000000' && v.trip) this.byTrip.set(`${v.cis}:${v.trip}`, v);
@@ -296,10 +304,12 @@ export class LiveTracker {
       if (!pr || pr.off > MAX_ROUTE_OFF_M || pr.pos > boardPos) continue;
       const vd = foldText(v.dest || '');
       if (wanted && vd && !wanted.includes(vd) && !vd.includes(wanted)) continue;
-      if (v.heading) {
+      // směr jízdy jako při párování: azimut DPMÚL míří k zastávce, ne po směru jízdy (travelHeading ho nebere)
+      const vh = travelHeading(v);
+      if (vh != null) {
         const k = poly.cum.findIndex((c) => c >= pr.pos);
         const i0 = Math.max(0, (k < 0 ? poly.pts.length - 1 : k) - 1), i1 = Math.min(poly.pts.length - 1, i0 + 1);
-        if (i1 > i0 && angleDiff(bearing(poly.pts[i0][0], poly.pts[i0][1], poly.pts[i1][0], poly.pts[i1][1]), v.heading) > MAX_HEADING_DIFF) continue;
+        if (i1 > i0 && angleDiff(bearing(poly.pts[i0][0], poly.pts[i0][1], poly.pts[i1][0], poly.pts[i1][1]), vh) > MAX_HEADING_DIFF) continue;
       }
       const gap = boardPos - pr.pos;
       if (gap <= MAX_APPROACH_M && gap < nearGap) { nearGap = gap; near = v; }

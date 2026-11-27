@@ -1,4 +1,5 @@
 // Vozidla na mapě: vlastní WebGL vrstva uvnitř MapLibre (kreslí se v jednom snímku s mapou, na GPU).
+import { t } from './i18n.js';
 //
 // Historie: DOM značky (~3 000 elementů) a pak canvas 2D (tisíce drawImage za snímek) zasekávaly zoom na mobilu,
 // vrstvy MapLibre (GeoJSON) zase při každé změně dat znovu rozvrhovaly všechny štítky, takže pohyb vozidel
@@ -75,10 +76,10 @@ export function vehicleCategory(v) {
   return 'bus';
 }
 export const CATEGORIES = [
-  { id: 'bus', label: 'Autobusy', note: 'včetně trolejbusů' },
-  { id: 'tram', label: 'Tramvaje' },
-  { id: 'metro', label: 'Metro' },
-  { id: 'train', label: 'Vlaky' },
+  { id: 'bus', label: t('cat.bus'), note: t('cat.bus.note') },
+  { id: 'tram', label: t('cat.tram') },
+  { id: 'metro', label: t('cat.metro') },
+  { id: 'train', label: t('cat.train') },
 ];
 
 /** Zpoždění tramvaje / metra (u nich barva zpoždění neukazuje): červený rámeček kolem štítku / tečky. */
